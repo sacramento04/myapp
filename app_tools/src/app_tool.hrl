@@ -112,7 +112,8 @@
     val,
     key,
     extra,
-    comment
+    comment,
+    format_name
 }).
 
 -record(macro, {

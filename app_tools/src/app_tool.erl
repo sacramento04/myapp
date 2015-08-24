@@ -1044,7 +1044,7 @@ init_column_field (CL) ->
     init_column_field(CL, #column{}).
     
 init_column_field ([], C) ->
-    C;
+    C #column{format_name = format_name(C #column.name)};
 init_column_field ([{FT, FV} | L], C) ->
     case FT of
         <<"COLUMN_NAME">> ->
@@ -1070,7 +1070,8 @@ generate_db_file (Db) ->
     generate_db_header(Db),
     generate_db_init(Db),
     generate_db_save(Db),
-    generate_db_dump(Db).
+    generate_db_dump(Db),
+    generate_db_game(Db).
     
 generate_db_header (Db) ->
     Dir = get_default_dir(header),
@@ -1257,7 +1258,7 @@ write_table_load ([T | L], Fd) ->
     [
         begin
             ?FWRITE(Fd, "\n\t\t\t\t{<<\"" ++ C #column.name ++ "\">>, "
-                ++ format_name(C #column.name) ++ "} = lists:keyfind(<<\""
+                ++ C #column.format_name ++ "} = lists:keyfind(<<\""
                 ++ C #column.name ++ "\">>, 1, Row),"
             )
         end
@@ -1273,10 +1274,10 @@ write_table_load ([T | L], Fd) ->
             case C #column.type of
                 "varchar" ->
                     ?FWRITE(Fd, "lib_mysql:mysql_binary_to_list("
-                        ++ format_name(C #column.name) ++ "), "
+                        ++ C #column.format_name ++ "), "
                     );
                 _ ->
-                    ?FWRITE(Fd, format_name(C #column.name) ++ ", ")
+                    ?FWRITE(Fd, C #column.format_name ++ ", ")
             end
         end
         || C <- table_primary_key(T)
@@ -1291,10 +1292,10 @@ write_table_load ([T | L], Fd) ->
             case C #column.type of
                 "varchar" ->
                     ?FWRITE(Fd, "lib_mysql:mysql_binary_to_list("
-                        ++ format_name(C #column.name) ++ "),"
+                        ++ C #column.format_name ++ "),"
                     );
                 _ ->
-                    ?FWRITE(Fd, format_name(C #column.name) ++ ",")
+                    ?FWRITE(Fd, C #column.format_name ++ ",")
             end
         end
         || C <- T #table.column
@@ -1344,9 +1345,10 @@ generate_db_save (Db) ->
         "SQL_NOTES, SQL_NOTES=0 */;\\n\\n\">>], self()),\n\n"
     ),
     
-    write_save_dump(Db #db.table_list, Fd),
+    TableList = [T || T <- Db #db.table_list, table_need_load(T)],
+    write_save_dump(TableList, Fd),
     ?FWRITE(Fd, "\n\tmysql_conn:stop(Pid),\n\tok."),
-    write_table_dump_save(Db #db.table_list, Fd),
+    write_table_dump_save(TableList, Fd),
     
     ?FWRITE(Fd, "\n\nlst_to_bin (null) ->\n\t<<\"NULL\">>;"
         "\nlst_to_bin (List) ->\n\tList2 = escape_str(List, []),"
@@ -1412,12 +1414,9 @@ write_table_dump_save ([T | L], Fd) ->
             
             lists:foreach(
                 fun(C) ->
-                    OCN = C #column.name,
-                    CN = format_name(OCN),
-                    TS = get_trans_by_column(C),
-                    
-                    ?FWRITE(Fd, "\n\t\t\t_" ++ CN ++ " = " ++ TS ++
-                        "(Record #" ++ TableName ++ "." ++ OCN ++ "),"
+                    ?FWRITE(Fd, "\n\t\t\t_" ++ C #column.format_name ++ " = " ++ 
+                        get_trans_by_column(C) ++ "(Record #" ++ 
+                        TableName ++ "." ++ C #column.name ++ "),"
                     )
                 end,
                 T #table.column
@@ -1430,8 +1429,7 @@ write_table_dump_save ([T | L], Fd) ->
             
             lists:foreach(
                 fun(C) ->
-                    CN = format_name(C #column.name),
-                    ?FWRITE(Fd, "\n\t\t\t\t_" ++ CN ++ "/binary, \",\",")
+                    ?FWRITE(Fd, "\n\t\t\t\t_" ++ C #column.format_name ++ "/binary, \",\",")
                 end,
                 T #table.column
             ),
@@ -1444,8 +1442,7 @@ write_table_dump_save ([T | L], Fd) ->
             
             lists:foreach(
                 fun(C) ->
-                    OCN = C #column.name,
-                    ?FWRITE(Fd, "\n\t\t\t\t\t\"`" ++ OCN ++ "`, \"")
+                    ?FWRITE(Fd, "\n\t\t\t\t\t\"`" ++ C #column.name ++ "`, \"")
                 end,
                 T #table.column
             ),
@@ -1466,12 +1463,9 @@ write_table_dump_save ([T | L], Fd) ->
             
             lists:foreach(
                 fun(C) ->
-                    OCN = C #column.name,
-                    CN = format_name(OCN),
-                    TS = get_trans_by_column(C),
-                    
-                    ?FWRITE(Fd, "\n\t\t_" ++ CN ++ " = " ++ TS ++
-                        "(Record #" ++ TableName ++ "." ++ OCN ++ "),"
+                    ?FWRITE(Fd, "\n\t\t_" ++ C #column.format_name ++ " = " ++ 
+                        get_trans_by_column(C) ++
+                        "(Record #" ++ TableName ++ "." ++ C #column.name ++ "),"
                     )
                 end,
                 T #table.column
@@ -1484,8 +1478,7 @@ write_table_dump_save ([T | L], Fd) ->
             
             lists:foreach(
                 fun(C) ->
-                    CN = format_name(C #column.name),
-                    ?FWRITE(Fd, "\n\t\t\t_" ++ CN ++ "/binary, \",\",")
+                    ?FWRITE(Fd, "\n\t\t\t_" ++ C #column.format_name ++ "/binary, \",\",")
                 end,
                 T #table.column
             ),
@@ -1498,8 +1491,7 @@ write_table_dump_save ([T | L], Fd) ->
             
             lists:foreach(
                 fun(C) ->
-                    OCN = C #column.name,
-                    ?FWRITE(Fd, "\n\t\t\t\t\"`" ++ OCN ++ "`, \"")
+                    ?FWRITE(Fd, "\n\t\t\t\t\"`" ++ C #column.name ++ "`, \"")
                 end,
                 T #table.column
             ),
@@ -1517,6 +1509,7 @@ write_table_dump_save ([T | L], Fd) ->
 generate_db_dump (Db) ->
     Dir = get_default_dir(out),
     {ok, Fd} = ?FOPEN(Dir ++ "game_db_dump.erl", [write]),
+    TableList = [T || T <- Db #db.table_list, table_need_load(T)],
     
     ?FWRITE(Fd, "-module(game_db_dump)."
         "\n\n-export([\n\trun/0, \n\tbackup/0\n])."
@@ -1544,7 +1537,7 @@ generate_db_dump (Db) ->
         fun(T) ->
             ?FWRITE(Fd, "\n\tdump_" ++ T #table.name ++ "(File),")
         end,
-        Db #db.table_list
+        TableList
     ),
     
     ?FWRITE(Fd, "\n\n\tok = file:close(File),\n\tok."
@@ -1569,11 +1562,11 @@ generate_db_dump (Db) ->
         fun(T) ->
             ?FWRITE(Fd, "\n\tdump_" ++ T #table.name ++ "(File),")
         end,
-        Db #db.table_list
+        TableList
     ),
     
     ?FWRITE(Fd, "\n\n\tok = file:close(File),\n\tok."),
-    write_table_dump_dump(Db #db.table_list, Fd),
+    write_table_dump_dump(TableList, Fd),
     
     ?FWRITE(Fd, "\n\nlst_to_bin (null) ->\n\t<<\"NULL\">>;"
         "\nlst_to_bin (List) ->\n\tList2 = escape_str(List, []),"
@@ -1624,12 +1617,9 @@ write_table_dump_dump ([T | L], Fd) ->
             
             lists:foreach(
                 fun(C) ->
-                    OCN = C #column.name,
-                    CN = format_name(OCN),
-                    TS = get_trans_by_column(C),
-                    
-                    ?FWRITE(Fd, "\n\t\t\t_" ++ CN ++ " = " ++ TS ++
-                        "(Record #" ++ TableName ++ "." ++ OCN ++ "),"
+                    ?FWRITE(Fd, "\n\t\t\t_" ++ C #column.format_name ++ " = " ++ 
+                        get_trans_by_column(C) ++
+                        "(Record #" ++ TableName ++ "." ++ C #column.name ++ "),"
                     )
                 end,
                 T #table.column
@@ -1642,8 +1632,7 @@ write_table_dump_dump ([T | L], Fd) ->
             
             lists:foreach(
                 fun(C) ->
-                    CN = format_name(C #column.name),
-                    ?FWRITE(Fd, "\n\t\t\t\t_" ++ CN ++ "/binary, \",\",")
+                    ?FWRITE(Fd, "\n\t\t\t\t_" ++ C #column.format_name ++ "/binary, \",\",")
                 end,
                 T #table.column
             ),
@@ -1656,8 +1645,7 @@ write_table_dump_dump ([T | L], Fd) ->
             
             lists:foreach(
                 fun(C) ->
-                    OCN = C #column.name,
-                    ?FWRITE(Fd, "\n\t\t\t\t\t\"`" ++ OCN ++ "`, \"")
+                    ?FWRITE(Fd, "\n\t\t\t\t\t\"`" ++ C #column.name ++ "`, \"")
                 end,
                 T #table.column
             ),
@@ -1679,12 +1667,9 @@ write_table_dump_dump ([T | L], Fd) ->
             
             lists:foreach(
                 fun(C) ->
-                    OCN = C #column.name,
-                    CN = format_name(OCN),
-                    TS = get_trans_by_column(C),
-                    
-                    ?FWRITE(Fd, "\n\t\t_" ++ CN ++ " = " ++ TS ++
-                        "(Record #" ++ TableName ++ "." ++ OCN ++ "),"
+                    ?FWRITE(Fd, "\n\t\t_" ++ C #column.format_name ++ " = " ++ 
+                        get_trans_by_column(C) ++
+                        "(Record #" ++ TableName ++ "." ++ C #column.name ++ "),"
                     )
                 end,
                 T #table.column
@@ -1697,8 +1682,7 @@ write_table_dump_dump ([T | L], Fd) ->
             
             lists:foreach(
                 fun(C) ->
-                    CN = format_name(C #column.name),
-                    ?FWRITE(Fd, "\n\t\t\t_" ++ CN ++ "/binary, \",\",")
+                    ?FWRITE(Fd, "\n\t\t\t_" ++ C #column.format_name ++ "/binary, \",\",")
                 end,
                 T #table.column
             ),
@@ -1711,8 +1695,7 @@ write_table_dump_dump ([T | L], Fd) ->
             
             lists:foreach(
                 fun(C) ->
-                    OCN = C #column.name,
-                    ?FWRITE(Fd, "\n\t\t\t\t\"`" ++ OCN ++ "`, \"")
+                    ?FWRITE(Fd, "\n\t\t\t\t\"`" ++ C #column.name ++ "`, \"")
                 end,
                 T #table.column
             ),
@@ -1726,6 +1709,151 @@ write_table_dump_dump ([T | L], Fd) ->
     end,
     
     write_table_dump_dump(L, Fd).
+    
+generate_db_game (Db) ->
+    Dir = get_default_dir(out),
+    {ok, Fd} = ?FOPEN(Dir ++ "game_db.erl", [write]),
+    TableList = [T || T <- Db #db.table_list, table_need_load(T)],
+    
+    ?FWRITE(Fd, "-module(game_db)."
+        "\n\n-export([\n\tstart_link/0,\n\tdirty_select/3,\n\tdirty_select/2,"
+        "\n\tdirty_read/1,\n\tselect/3,\n\tselect/2,\n\tread/1,\n\twrite/1,"
+        "\n\tdelete/1,\n\tdelete_select/3,\n\tdelete_select/2,\n\ttable/1,"
+        "\n\ttable/2,\n\tets/1,\n\tets/2,\n\tcount/1,\n\tmemory/0,"
+        "\n\tmemory/1,\n\tfetch/1,\n\tdo/1\n])."
+        "\n\n-include(\"gen/game_db.hrl\")."
+        "\n\n-define(ENSURE_TRAN, ensure_tran())."
+        "\n\nensure_tran () ->"
+        "\n\tcase get(tran_action_list) of"
+        "\n\t\tundefined -> exit(need_gamedb_tran);"
+        "\n\t\t_ -> ok\n\tend."
+        "\n\nstart_link () ->"
+        "\n\tproc_lib:start_link(game_db_init, init, [])."
+        "\n\ndirty_select (Table, PlayerId, MatchSpec) ->"
+        "\n\tselect(Table, PlayerId, MatchSpec)."
+        "\n\ndirty_select (Table, MatchSpec) ->"
+        "\n\tselect(Table, MatchSpec)."
+        "\n\ndirty_read (Key) ->\n\tread(Key)."
+    ),
+    
+    write_db_select(TableList, Fd),
+    write_db_read(TableList, Fd),
+    write_db_write(TableList, Fd),
+    
+    ?FCLOSE(Fd).
+ 
+write_db_select (L, Fd) ->
+    write_db_select(L, Fd, [], []).
+    
+write_db_select ([], Fd, S2L, S3L) ->
+    write_db_select_2(lists:reverse(S2L), Fd),
+    ?FWRITE(Fd, ".", -1),
+    write_db_select_3(lists:reverse(S3L), Fd),
+    ?FWRITE(Fd, ".", -1);
+write_db_select ([T | L], Fd, S2L, S3L) ->
+    case table_need_split(T) of
+        {true, _} ->
+            write_db_select(L, Fd, S2L, [T | S3L]);
+        _ ->
+            write_db_select(L, Fd, [T | S2L], S3L)
+    end.
+    
+write_db_select_2 ([], _) ->
+    ok;
+write_db_select_2 ([T | L], Fd) ->
+    ?FWRITE(Fd, "\n\nselect (" ++ T #table.name ++ 
+        ", MatchSpec) ->\n\tets:select(t_" ++
+        T #table.name ++ ", MatchSpec);"
+    ),
+    
+    write_db_select_2(L, Fd).
+    
+write_db_select_3 ([], _) ->
+    ok;
+write_db_select_3 ([T | L], Fd) ->
+    ?FWRITE(Fd, "\n\nselect (" ++ T #table.name ++
+        ", ModeOrFragId, MatchSpec) ->"
+        "\n\tcase ModeOrFragId of"
+        "\n\t\tslow ->\n\t\t\tfetch_select(\"t_" ++
+        T #table.name ++ "_\", MatchSpec);"
+        "\n\t\tFragId ->\n\t\t\tets:select(list_to_atom(\"t_" ++
+        T #table.name ++ 
+        "_\" ++ integer_to_list(FragId rem 100)), MatchSpec)\n\tend;"
+    ),
+    
+    write_db_select_3(L, Fd).
+    
+write_db_read ([], Fd) ->
+    ?FWRITE(Fd, ".", -1);
+write_db_read ([T | L], Fd) ->
+    ?FWRITE(Fd, "\n\nread (#pk_" ++ T #table.name ++ "{"),
+    PK = table_primary_key(T),
+    
+    lists:foreach(
+        fun(K) ->
+            ?FWRITE(Fd, K #column.name ++ " = " ++ K #column.format_name ++ ", ")
+        end,
+        PK
+    ),
+    
+    ?FWRITE(Fd, "}) ->", -2),
+    
+    case table_need_split(T) of
+        {true, SC} ->
+            case lists:member(SC, PK) of
+                true ->
+                    ?FWRITE(Fd, "\n\tets:lookup(list_to_atom(\"t_" ++ T #table.name ++ 
+                        "_\" ++ integer_to_list(" ++ SC #column.format_name ++ " rem 100)), {"
+                    );
+                _ ->
+                    ?FWRITE(Fd, "\n\tfetch_lookup(\"t_" ++ T #table.name ++ "_\", {")
+            end,
+            
+            lists:foreach(
+                fun(K) ->
+                    ?FWRITE(Fd, K #column.format_name ++ ", ")
+                end,
+                PK
+            ),
+            
+            ?FWRITE(Fd, "});", -2);
+        _ ->
+            ?FWRITE(Fd, "\n\tets:lookup(t_" ++ T #table.name ++ ", {"),
+            
+            lists:foreach(
+                fun(K) ->
+                    ?FWRITE(Fd, K #column.format_name ++ ", ")
+                end,
+                PK
+            ),
+            
+            ?FWRITE(Fd, "});", -2)
+    end,
+    
+    write_db_read(L, Fd).
+    
+write_db_write ([], Fd) ->
+    ?FWRITE(Fd, ".", -1);
+write_db_write ([T | L], Fd) ->
+    ?FWRITE(Fd, "\n\nwrite (Record) when is_record(Record, " ++
+        T #table.name ++ ") ->\n\t?ENSURE_TRAN,"
+    ),
+    
+    case table_need_split(T) of
+        {true, SC} ->
+            ?FWRITE(Fd, "\n\tEtsTable = list_to_atom(\"t_" ++
+                T #table.name ++ "_\" ++ integer_to_list(Record #" ++
+                T #table.name ++ "." ++ SC #column.name ++ " rem 100)),"
+            );
+        _ ->
+            ?FWRITE(Fd, "\n\tEtsTable = t_" ++ T #table.name ++ ",")
+    end,
+    
+    ?FWRITE(Fd, "\n\n\tcase Record #player_achievement.row_key of"
+        "\n\t\tundefined ->\n\t\t\tvalidate_for_insert(Record),"
+    ),
+    
+    write_db_write(L, Fd).
     
 get_trans_by_column (C) ->
     case C #column.type of
