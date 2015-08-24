@@ -1069,7 +1069,8 @@ field_val (V) ->
 generate_db_file (Db) ->
     generate_db_header(Db),
     generate_db_init(Db),
-    generate_db_save(Db).
+    generate_db_save(Db),
+    generate_db_dump(Db).
     
 generate_db_header (Db) ->
     Dir = get_default_dir(header),
@@ -1345,7 +1346,7 @@ generate_db_save (Db) ->
     
     write_save_dump(Db #db.table_list, Fd),
     ?FWRITE(Fd, "\n\tmysql_conn:stop(Pid),\n\tok."),
-    write_table_dump(Db #db.table_list, Fd),
+    write_table_dump_save(Db #db.table_list, Fd),
     
     ?FWRITE(Fd, "\n\nlst_to_bin (null) ->\n\t<<\"NULL\">>;"
         "\nlst_to_bin (List) ->\n\tList2 = escape_str(List, []),"
@@ -1388,9 +1389,9 @@ write_save_dump ([T | L], Fd) ->
     
     write_save_dump(L, Fd).
     
-write_table_dump ([], _) ->
+write_table_dump_save ([], _) ->
     ok;
-write_table_dump ([T | L], Fd) ->
+write_table_dump_save ([T | L], Fd) ->
     TableName = T #table.name,
     
     ?FWRITE(Fd, "\n\ndump_" ++ T #table.name ++ " (Pid) ->" 
@@ -1511,7 +1512,220 @@ write_table_dump ([T | L], Fd) ->
             )
     end,
     
-    write_table_dump(L, Fd).
+    write_table_dump_save(L, Fd).
+    
+generate_db_dump (Db) ->
+    Dir = get_default_dir(out),
+    {ok, Fd} = ?FOPEN(Dir ++ "game_db_dump.erl", [write]),
+    
+    ?FWRITE(Fd, "-module(game_db_dump)."
+        "\n\n-export([\n\trun/0, \n\tbackup/0\n])."
+        "\n\n-include(\"gen/game_db.hrl\")."
+        "\n\nrun () ->"
+        "\n\t%% supervisor:terminate_child(game, socket_server_sup),"
+        "\n\t%% mod_online:wait_all_online_player_exit(15),"
+        "\n\n\tFileName = \"./game_db.sql\","
+        "\n\n\tcase filelib:is_file(FileName) of"
+        "\n\t\ttrue -> ok;\n\t\tfalse -> ok = filelib:ensure_dir(FileName)"
+        "\n\tend,\n\n\t{ok, File} = file:open(FileName, [write, raw]),"
+        "\n\n\tok = file:write(File, <<\"/*!40101 SET NAMES utf8 */;\\n\">>),"
+        "\n\tok = file:write(File, <<\"/*!40101 SET SQL_MODE=''*/;\\n\">>),"
+        "\n\tok = file:write(File, <<\"/*!40014 SET @OLD_UNIQUE_CHECKS"
+        "=@@UNIQUE_CHECKS, UNIQUE_CHECKS=0 */;\\n\">>),"
+        "\n\tok = file:write(File, <<\"/*!40014 SET @OLD_FOREIGN_KEY_CHECKS"
+        "=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;\\n\">>),"
+        "\n\tok = file:write(File, <<\"/*!40101 SET @OLD_SQL_MODE="
+        "@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;\\n\">>),"
+        "\n\tok = file:write(File, <<\"/*!40111 SET @OLD_SQL_NOTES="
+        "@@SQL_NOTES, SQL_NOTES=0 */;\\n\\n\">>),\n"
+    ),
+    
+    lists:foreach(
+        fun(T) ->
+            ?FWRITE(Fd, "\n\tdump_" ++ T #table.name ++ "(File),")
+        end,
+        Db #db.table_list
+    ),
+    
+    ?FWRITE(Fd, "\n\n\tok = file:close(File),\n\tok."
+        "\n\nbackup () ->"
+        "\n\tFileName = \"./game_db_backup.sql\","
+        "\n\n\tcase filelib:is_file(FileName) of"
+        "\n\t\ttrue -> ok;\n\t\tfalse -> ok = filelib:ensure_dir(FileName)"
+        "\n\tend,\n\n\t{ok, File} = file:open(FileName, [write, raw]),"
+        "\n\n\tok = file:write(File, <<\"/*!40101 SET NAMES utf8 */;\\n\">>),"
+        "\n\tok = file:write(File, <<\"/*!40101 SET SQL_MODE=''*/;\\n\">>),"
+        "\n\tok = file:write(File, <<\"/*!40014 SET @OLD_UNIQUE_CHECKS"
+        "=@@UNIQUE_CHECKS, UNIQUE_CHECKS=0 */;\\n\">>),"
+        "\n\tok = file:write(File, <<\"/*!40014 SET @OLD_FOREIGN_KEY_CHECKS"
+        "=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;\\n\">>),"
+        "\n\tok = file:write(File, <<\"/*!40101 SET @OLD_SQL_MODE="
+        "@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;\\n\">>),"
+        "\n\tok = file:write(File, <<\"/*!40111 SET @OLD_SQL_NOTES="
+        "@@SQL_NOTES, SQL_NOTES=0 */;\\n\\n\">>),\n"
+    ),
+    
+    lists:foreach(
+        fun(T) ->
+            ?FWRITE(Fd, "\n\tdump_" ++ T #table.name ++ "(File),")
+        end,
+        Db #db.table_list
+    ),
+    
+    ?FWRITE(Fd, "\n\n\tok = file:close(File),\n\tok."),
+    write_table_dump_dump(Db #db.table_list, Fd),
+    
+    ?FWRITE(Fd, "\n\nlst_to_bin (null) ->\n\t<<\"NULL\">>;"
+        "\nlst_to_bin (List) ->\n\tList2 = escape_str(List, []),"
+        "\n\tBin = list_to_binary(List2),"
+        "\n\t<<\"'\", Bin/binary, \"'\">>."
+        "\n\nint_to_bin (null) ->\n\t<<\"NULL\">>;"
+        "\nint_to_bin (Value) ->\n\tlist_to_binary(integer_to_list(Value))."
+        "\n\nrel_to_bin (null) ->\n\t<<\"NULL\">>;"
+        "\nrel_to_bin (Value) when is_integer(Value) ->"
+        "\n\tlist_to_binary(integer_to_list(Value));"
+        "\nrel_to_bin (Value) ->\n\tlist_to_binary(float_to_list(Value))."
+        "\n\nescape_str ([], Result) ->\n\tlists:reverse(Result);"
+        "\nescape_str ([$' | String], Result) ->"
+        "\n\tescape_str(String, [$' | [$\\\\ | Result]]);"
+        "\nescape_str ([$\" | String], Result) ->"
+        "\n\tescape_str(String, [$\" | [$\\\\ | Result]]);"
+        "\nescape_str ([$\\\\ | String], Result) ->"
+        "\n\tescape_str(String, [$\\ | [$\\\\ | Result]]);"
+        "\nescape_str ([$\\n | String], Result) ->"
+        "\n\tescape_str(String, [$n | [$\\\\ | Result]]);"
+        "\nescape_str ([$\\r | String], Result) ->"
+        "\n\tescape_str(String, [$r | [$\\\\ | Result]]);"
+        "\nescape_str ([Char | String], Result) ->"
+        "\n\tescape_str(String, [Char | Result])."
+    ),
+    
+    ?FCLOSE(Fd).
+    
+write_table_dump_dump ([], _) ->
+    ok;
+write_table_dump_dump ([T | L], Fd) ->
+    TableName = T #table.name,
+    
+    ?FWRITE(Fd, "\n\ndump_" ++ T #table.name ++ " (File) ->" 
+        "\n\tok = file:write(File, <<\"DELETE FROM `abnormal_record_type`;\\n\\n\">>),"
+    ),
+ 
+    case table_need_split(T) of
+        {true, _} ->
+            ?FWRITE(Fd, "\n\tSize = lists:foldl(fun(I, S)-> S + "
+                "ets:info(list_to_atom(\"t_" ++ TableName ++ "_\""
+                " ++ integer_to_list(I)), size) end, 0, lists:seq(0, 99)),"
+            ),
+            
+            ?FWRITE(Fd, "\n\n\tlists:foldl(fun(I, {S1, N1, L1}) ->"
+                "\n\t\tets:foldl(fun(Record, {S, N, L}) ->"
+            ),
+            
+            lists:foreach(
+                fun(C) ->
+                    OCN = C #column.name,
+                    CN = format_name(OCN),
+                    TS = get_trans_by_column(C),
+                    
+                    ?FWRITE(Fd, "\n\t\t\t_" ++ CN ++ " = " ++ TS ++
+                        "(Record #" ++ TableName ++ "." ++ OCN ++ "),"
+                    )
+                end,
+                T #table.column
+            ),
+            
+            ?FWRITE(Fd, "\n\n\t\t\tLast = if N == 100 orelse S + 1 == Size ->"
+                " <<\");\\n\\n\">>; true -> <<\"),\\n\">> end,"
+                "\n\n\t\t\tL2 = [<<\"(\","
+            ),
+            
+            lists:foreach(
+                fun(C) ->
+                    CN = format_name(C #column.name),
+                    ?FWRITE(Fd, "\n\t\t\t\t_" ++ CN ++ "/binary, \",\",")
+                end,
+                T #table.column
+            ),
+            
+            ?FWRITE(Fd, "\n\t\t\t\tLast/binary\n\t\t\t>> | L],"
+                "\n\n\t\t\tif N == 100 orelse S + 1 == Size ->"
+                "\n\t\t\t\tfile:write(File, [<<\"INSERT IGNORE INTO `" ++
+                TableName ++ "` (\"", -4
+            ),
+            
+            lists:foreach(
+                fun(C) ->
+                    OCN = C #column.name,
+                    ?FWRITE(Fd, "\n\t\t\t\t\t\"`" ++ OCN ++ "`, \"")
+                end,
+                T #table.column
+            ),
+            
+            ?FWRITE(Fd, "\"\n\t\t\t\t\t\") VALUES \">> | lists:reverse(L2)], "
+                "self()),\n\n\t\t\t\t{S + 1, 0, []};\n\t\t\ttrue ->"
+                "\n\t\t\t\t{S + 1, N + 1, L2}\n\t\t\tend"
+                "\n\t\tend, {S1, N1, L1}, list_to_atom(\"t_" ++ 
+                TableName ++ "\" ++ integer_to_list(I)))"
+                "\n\tend, {0, 0, []}, lists:seq(0, 99)),"
+                "\n\tok = file:write(File, <<\"\\n\">>),\n\tok.", -3
+            );
+        _ ->
+            ?FWRITE(Fd, "\n\tSize = ets:info(t_" ++ T #table.name ++ 
+                ", size),"
+            ),
+            
+            ?FWRITE(Fd, "\n\n\tets:foldl(fun(Record, {S, N, L}) ->"),
+            
+            lists:foreach(
+                fun(C) ->
+                    OCN = C #column.name,
+                    CN = format_name(OCN),
+                    TS = get_trans_by_column(C),
+                    
+                    ?FWRITE(Fd, "\n\t\t_" ++ CN ++ " = " ++ TS ++
+                        "(Record #" ++ TableName ++ "." ++ OCN ++ "),"
+                    )
+                end,
+                T #table.column
+            ),
+            
+            ?FWRITE(Fd, "\n\n\t\tLast = if N == 100 orelse S + 1 == Size ->"
+                " <<\");\\n\\n\">>; true -> <<\"),\\n\">> end,"
+                "\n\n\t\tL2 = [<<\"(\","
+            ),
+            
+            lists:foreach(
+                fun(C) ->
+                    CN = format_name(C #column.name),
+                    ?FWRITE(Fd, "\n\t\t\t_" ++ CN ++ "/binary, \",\",")
+                end,
+                T #table.column
+            ),
+            
+            ?FWRITE(Fd, "\n\t\t\tLast/binary\n\t\t>> | L],"
+                "\n\n\t\tif N == 100 orelse S + 1 == Size ->"
+                "\n\t\t\tok = file:write(File, [<<\"INSERT IGNORE INTO `" ++
+                TableName ++ "` (\"", -4
+            ),
+            
+            lists:foreach(
+                fun(C) ->
+                    OCN = C #column.name,
+                    ?FWRITE(Fd, "\n\t\t\t\t\"`" ++ OCN ++ "`, \"")
+                end,
+                T #table.column
+            ),
+            
+            ?FWRITE(Fd, "\"\n\t\t\t\t\") VALUES \">> | lists:reverse(L2)], "
+                "self()),\n\n\t\t\t{S + 1, 0, []};\n\t\ttrue ->"
+                "\n\t\t\t{S + 1, N + 1, L2}\n\t\tend"
+                "\n\tend, {0, 0, []}, t_" ++ TableName ++
+                "),\n\tok = file:write(File, <<\"\\n\">>),\n\tok.", -3
+            )
+    end,
+    
+    write_table_dump_dump(L, Fd).
     
 get_trans_by_column (C) ->
     case C #column.type of
