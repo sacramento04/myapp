@@ -1071,7 +1071,8 @@ generate_db_file (Db) ->
     generate_db_init(Db),
     generate_db_save(Db),
     generate_db_dump(Db),
-    generate_db_game(Db).
+    generate_db_game(Db),
+    generate_db_sync(Db).
     
 generate_db_header (Db) ->
     Dir = get_default_dir(header),
@@ -2275,6 +2276,131 @@ write_db_other (Fd) ->
         "\n\t\tets:select(list_to_atom(TablePrefix ++ integer_to_list(N)), MatchSpec)"
         " | Result\n\t])."
     ).
+    
+generate_db_sync (Db) ->
+    Dir = get_default_dir(out),
+    {ok, Fd} = ?FOPEN(Dir ++ "game_db_sync.erl", [write]),
+    
+    ?FWRITE(Fd, "-module(game_db_sync)."
+        "\n\n-export([\n\tstart_proc/0,\n\tsync_proc_init/0,"
+        "\n\n\tstart_worker0/0,\n\tstart_worker1/0,"
+        "\n\n\tsync_worker0_init/0,\n\tsync_worker1_init/0,"
+        "\n\n\twait_for_all_data_sync0/1,"
+        "\n\twait_for_all_data_sync1/1,"
+        "\n\n\tcount_work0/0,\n\tcount_work1/0\n])."
+        "\n\n-include(\"gen/game_db.hrl\")."
+    ),
+    
+    write_action_to_sql(Db #db.table_list, Fd),
+    write_update_sql(Db #db.table_list, Fd),
+    
+    ?FCLOSE(Fd).
+    
+write_action_to_sql ([], Fd) ->
+    ?FWRITE(Fd, ".", -1);
+write_action_to_sql ([T | L], Fd) ->
+    ?FWRITE(Fd, "\n\ntran_action_to_sql ({" ++ T #table.name ++
+        ", sql, Sql}) ->\n\tlist_to_binary(Sql);"
+        "\n\ntran_action_to_sql ({" ++ T #table.name ++
+        ", insert, Record}) ->"
+    ),
+    
+    lists:foreach(
+        fun(C) ->
+            ?FWRITE(Fd, "\n\t" ++ C #column.format_name ++ " = " ++
+                get_trans_by_column(C) ++ "(Record #" ++
+                T #table.name ++ "." ++ C #column.name ++ "),"
+            )
+        end,
+        T #table.column
+    ),
+    
+    ?FWRITE(Fd, "\n\n\t<<\n\t\"INSERT IGNORE INTO `" ++ 
+        T #table.name ++ "` SET \""
+    ),
+    
+    lists:foreach(
+        fun(C) ->
+            ?FWRITE(Fd, "\n\t\"`" ++ C #column.name ++ "` = \", " ++
+                C #column.format_name ++ "/binary,"
+            )
+        end,
+        T #table.column
+    ),
+    
+    ?FWRITE(Fd, "\n\t\";\\n\"\n\t>>;\n\ntran_action_to_sql ({" ++ 
+        T #table.name ++ ", delete, Record}) ->"
+    ),
+    
+    PK = table_primary_key(T),
+    
+    lists:foreach(
+        fun(K) ->
+            ?FWRITE(Fd, "\n\t" ++ K #column.format_name ++ " = " ++
+                get_trans_by_column(K) ++ "(Record #" ++
+                T #table.name ++ "." ++ K #column.name ++ "),"
+            )
+        end,
+        PK
+    ),
+    
+    ?FWRITE(Fd, "\n\n\t<<\n\t\"DELETE FROM `" ++
+        T #table.name ++ "` WHERE\","
+    ),
+    
+    lists:foreach(
+        fun(K) ->
+            ?FWRITE(Fd, "\n\t\" `" ++ K #column.name ++ "` = \", " ++
+                K #column.format_name ++ "/binary, \" AND \","
+            )
+        end,
+        PK
+    ),
+    
+    ?FWRITE(Fd, "\n\t\";\\n\"\n\t>>;"
+        "\n\ntran_action_to_sql ({" ++ T #table.name ++ 
+        ", update, _, []}) ->\n\tnone;\ntran_action_to_sql ({" ++
+        T #table.name ++ ", update, Record, Changes}) ->"
+        "\n\tSql = generate_update_sql(" ++ T #table.name ++ 
+        ", Record, Changes, [<<\"UPDATE `" ++ T #table.name ++ 
+        "` SET \">>]),\n\tlist_to_binary(lists:reverse(Sql));", -9
+    ),
+    
+    write_action_to_sql(L, Fd).
+    
+write_update_sql ([], Fd) ->
+    ?FWRITE(Fd, ".", -1);
+write_update_sql ([T | L], Fd) ->
+    ?FWRITE(Fd, "\n\ngenerate_update_sql (" ++ T #table.name ++
+        ", Record, [], Sql) ->"
+    ),
+    
+    PK = table_primary_key(T),
+    
+    lists:foreach(
+        fun(K) ->
+            ?FWRITE(Fd, "\n\t" ++ K #column.format_name ++ " = " ++ 
+                get_trans_by_column(K) ++ "(Record #" ++
+                T #table.name ++ "." ++ K #column.name ++ "),"
+            )
+        end,
+        PK
+    ),
+    
+    ?FWRITE(Fd, "\n\t[<<\" WHERE \", "),
+    
+    lists:foreach(
+        fun(K) ->
+            ?FWRITE(Fd, "\" `" ++ K #column.name ++ "` = \", " ++
+                K #column.format_name ++ "/binary, \" AND \", "
+            )
+        end,
+        PK
+    ),
+    
+    ?FWRITE(Fd, "\";\\n\">> | Sql];", -9),
+    
+    write_update_sql(L, Fd).
     
 get_trans_by_column (C) ->
     case C #column.type of
