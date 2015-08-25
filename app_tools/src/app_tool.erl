@@ -1206,8 +1206,8 @@ write_table_init ([T | L], Fd) ->
             ok
     end,
     
-    case table_need_load(T) of
-        true ->
+    case table_write_only(T) of
+        false ->
             case table_need_split(T) of
                 {true, _} ->
                     ?FWRITE(Fd, "\n\t[ets:new(list_to_atom(\"t_" 
@@ -1231,7 +1231,7 @@ write_table_init ([T | L], Fd) ->
     
 write_db_load (Db, Fd) ->
     write_table_load(
-        [T || T <- Db #db.table_list, table_need_load(T)],
+        [T || T <- Db #db.table_list, table_write_only(T) =:= false],
         Fd
     ).
     
@@ -1345,7 +1345,7 @@ generate_db_save (Db) ->
         "SQL_NOTES, SQL_NOTES=0 */;\\n\\n\">>], self()),\n\n"
     ),
     
-    TableList = [T || T <- Db #db.table_list, table_need_load(T)],
+    TableList = [T || T <- Db #db.table_list, table_write_only(T) =:= false],
     write_save_dump(TableList, Fd),
     ?FWRITE(Fd, "\n\tmysql_conn:stop(Pid),\n\tok."),
     write_table_dump_save(TableList, Fd),
@@ -1509,7 +1509,7 @@ write_table_dump_save ([T | L], Fd) ->
 generate_db_dump (Db) ->
     Dir = get_default_dir(out),
     {ok, Fd} = ?FOPEN(Dir ++ "game_db_dump.erl", [write]),
-    TableList = [T || T <- Db #db.table_list, table_need_load(T)],
+    TableList = [T || T <- Db #db.table_list, table_write_only(T) =:= false],
     
     ?FWRITE(Fd, "-module(game_db_dump)."
         "\n\n-export([\n\trun/0, \n\tbackup/0\n])."
@@ -1713,13 +1713,13 @@ write_table_dump_dump ([T | L], Fd) ->
 generate_db_game (Db) ->
     Dir = get_default_dir(out),
     {ok, Fd} = ?FOPEN(Dir ++ "game_db.erl", [write]),
-    TableList = [T || T <- Db #db.table_list, table_need_load(T)],
+    TableList = [T || T <- Db #db.table_list, table_write_only(T) =:= false],
     
     ?FWRITE(Fd, "-module(game_db)."
         "\n\n-export([\n\tstart_link/0,\n\tdirty_select/3,\n\tdirty_select/2,"
         "\n\tdirty_read/1,\n\tselect/3,\n\tselect/2,\n\tread/1,\n\twrite/1,"
-        "\n\tdelete/1,\n\tdelete_select/3,\n\tdelete_select/2,\n\ttable/1,"
-        "\n\ttable/2,\n\tets/1,\n\tets/2,\n\tcount/1,\n\tmemory/0,"
+        "\n\tdelete/1,\n\tdelete_all/1,\n\tdelete_select/3,\n\tdelete_select/2,"
+        "\n\ttable/1,\n\ttable/2,\n\tets/1,\n\tets/2,\n\tcount/1,\n\tmemory/0,"
         "\n\tmemory/1,\n\tfetch/1,\n\tdo/1\n])."
         "\n\n-include(\"gen/game_db.hrl\")."
         "\n\n-define(ENSURE_TRAN, ensure_tran())."
@@ -1738,7 +1738,21 @@ generate_db_game (Db) ->
     
     write_db_select(TableList, Fd),
     write_db_read(TableList, Fd),
-    write_db_write(TableList, Fd),
+    write_db_write(Db #db.table_list, Fd),
+    write_db_delete(TableList, Fd),
+    write_db_delete_all(TableList, Fd),
+    write_db_delete_select(TableList, Fd),
+    write_db_table_1(TableList, Fd),
+    write_db_table_2(TableList, Fd),
+    write_db_ets(TableList, Fd),
+    write_db_v_insert(Db #db.table_list, Fd),
+    write_db_v_update(Db #db.table_list, Fd),
+    write_db_count(TableList, Fd),
+    write_db_memory_0(TableList, Fd),
+    write_db_memory_1(TableList, Fd),
+    write_db_fetch(Fd),
+    write_db_do(Fd),
+    write_db_other(Fd),
     
     ?FCLOSE(Fd).
  
@@ -1849,11 +1863,418 @@ write_db_write ([T | L], Fd) ->
             ?FWRITE(Fd, "\n\tEtsTable = t_" ++ T #table.name ++ ",")
     end,
     
-    ?FWRITE(Fd, "\n\n\tcase Record #player_achievement.row_key of"
+    ?FWRITE(Fd, "\n\n\tcase Record #" ++ T #table.name ++ ".row_key of"
         "\n\t\tundefined ->\n\t\t\tvalidate_for_insert(Record),"
     ),
     
+    PK = table_primary_key(T),
+    
+    case table_auto_increment(T) of
+        {true, AC} ->
+            ?FWRITE(Fd, "\n\t\t\tNewId = ets:update_counter(auto_increment, {" ++
+                T #table.name ++ ", " ++ AC #column.name ++ "}, 1),"
+                "\n\n\t\t\tNewRecord = Record #" ++ T #table.name ++ 
+                "{\n\t\t\t\t" ++ AC #column.name ++ " = NewId,\n\t\t\t\trow_key = {"
+            ),
+            
+            lists:foreach(
+                fun(K) ->
+                    case K =:= AC of
+                        true ->
+                            ?FWRITE(Fd, "\n\t\t\t\t\tNewId,");
+                        _ ->
+                            ?FWRITE(Fd, "\n\t\t\t\t\tRecord #" ++
+                                T #table.name ++ "." ++ K #column.name ++ ","
+                            )
+                    end
+                end,
+                PK
+            ),
+            
+            ?FWRITE(Fd, "\n\t\t\t\t}\n\t\t\t},", -1);
+        _ ->
+            ?FWRITE(Fd, "\n\n\t\t\tNewRecord = Record #" ++ 
+                T #table.name ++ "{\n\t\t\t\trow_key = {"
+            ),
+            
+            lists:foreach(
+                fun(K) ->
+                    ?FWRITE(Fd, "\n\t\t\t\t\tRecord #" ++
+                        T #table.name ++ "." ++ K #column.name ++ ","
+                    )
+                end,
+                PK
+            ),
+            
+            ?FWRITE(Fd, "\n\t\t\t\t}\n\t\t\t},", -1)
+    end,
+    
+    case table_write_only(T) of
+        false ->
+            ?FWRITE(Fd, "\n\n\t\t\ttrue = ets:insert_new(EtsTable, NewRecord),"
+                "\n\t\t\tadd_tran_log({insert, EtsTable, NewRecord #" ++ 
+                T #table.name ++ ".row_key}),"
+            );
+        _ ->
+            ?FWRITE(Fd, "\n")
+    end,
+    
+    ?FWRITE(Fd, "\n\t\t\tadd_tran_action({" ++ T #table.name ++
+        ", insert, NewRecord}),\n\t\t\t{ok, NewRecord};\n\t\t_ ->"
+        "\n\t\t\tvalidate_for_update(Record),"
+        "\n\t\t\t[OldRecord] = ets:lookup(EtsTable, Record #" ++ T #table.name ++
+        ".row_key),\n\t\t\tif OldRecord #" ++ T #table.name ++ 
+        ".row_ver =:= Record #" ++ T #table.name ++ ".row_ver -> ok end,"
+        "\n\t\t\tChanges = get_changes(" ++ 
+        integer_to_list(length(T #table.column) + 2) ++ ", Record, OldRecord),"
+        "\n\t\t\tRealNewRecord = Record #" ++ T #table.name ++ 
+        "{row_ver = Record #" ++ T #table.name ++ ".row_ver + 1},"
+        "\n\t\t\tets:insert(EtsTable, RealNewRecord),"
+        "\n\t\t\tadd_tran_log({update, EtsTable, OldRecord}),"
+        "\n\t\t\tadd_tran_action({" ++ T #table.name ++
+        ", update, Record, Changes}),\n\t\t\t{ok, RealNewRecord}\n\tend;"
+    ),
+    
     write_db_write(L, Fd).
+    
+write_db_delete ([], Fd) ->
+    ?FWRITE(Fd, ".", -1);
+write_db_delete ([T | L], Fd) ->
+    ?FWRITE(Fd, "\n\ndelete (#" ++ T #table.name ++ 
+        "{row_key = RowKey} = Record) ->\n\t?ENSURE_TRAN,"
+    ),
+    
+    case table_need_split(T) of
+        {true, SC} ->
+            ?FWRITE(Fd, "\n\tEtsTable = list_to_atom(\"t_" ++ 
+                T #table.name ++ "_\" ++ integer_to_list(Record #" ++ 
+                T #table.name ++ "." ++ SC #column.name ++ " rem 100)),"
+            );
+        _ ->
+            ?FWRITE(Fd, "\n\tEtsTable = t_" ++ T #table.name ++ ",")
+    end,
+    
+    ?FWRITE(Fd, "\n\tets:delete(EtsTable, RowKey),"
+        "\n\tadd_tran_log({delete, EtsTable, Record}),\n\tadd_tran_action({" ++ 
+        T #table.name ++ ", delete, Record}),\n\tok;"
+    ),
+    
+    write_db_delete(L, Fd).
+    
+write_db_delete_all ([], Fd) ->
+    ?FWRITE(Fd, ".", -1);
+write_db_delete_all ([T | L], Fd) ->
+    ?FWRITE(Fd, "\n\ndelete_all (" ++ T #table.name ++ ") ->"),
+    
+    case table_need_split(T) of
+        {true, _} ->
+            ?FWRITE(Fd, "\n\t[ets:delete_all_objects(list_to_atom(\"t_" ++
+                T #table.name ++ 
+                "_\" ++ integer_to_list(Id))) || Id <- lists:seq(0, 99)],"
+                "\n\tadd_tran_action({" ++ T #table.name ++ 
+                ", sql, \"DELETE FROM `" ++ T #table.name ++ "`;\"}),\n\tok;"
+            );
+        _ ->
+            ?FWRITE(Fd, "\n\tets:delete_all_objects(t_" ++ T #table.name ++ 
+                "),\n\tadd_tran_action({" ++ T #table.name ++ 
+                ", sql, \"DELETE FROM `" ++ T #table.name ++ "`;\"}),\n\tok;"
+            )
+    end,
+    
+    write_db_delete_all(L, Fd).
+    
+write_db_delete_select (L, Fd) ->
+    write_db_delete_select(L, Fd, [], []).
+    
+write_db_delete_select ([], Fd, S2L, S3L) ->
+    write_db_delete_select_2(lists:reverse(S2L), Fd),
+    ?FWRITE(Fd, ".", -1),
+    write_db_delete_select_3(lists:reverse(S3L), Fd),
+    ?FWRITE(Fd, ".", -1);
+write_db_delete_select ([T | L], Fd, S2L, S3L) ->
+    case table_need_split(T) of
+        {true, _} ->
+            write_db_delete_select(L, Fd, S2L, [T | S3L]);
+        _ ->
+            write_db_delete_select(L, Fd, [T | S2L], S3L)
+    end.
+    
+write_db_delete_select_2 ([], _) ->
+    ok;
+write_db_delete_select_2 ([T | L], Fd) ->
+    ?FWRITE(Fd, "\n\ndelete_select (" ++ T #table.name ++ 
+        ", MatchSpec) ->\n\t?ENSURE_TRAN,"
+        "\n\n\tcase select(" ++ T #table.name ++
+        ", MatchSpec) of\n\t\t[] ->\n\t\t\t{ok, 0};"
+        "\n\t\tRows when is_list(Rows) ->"
+        "\n\t\t\tNum = lists:foldl(fun(Row, Count) ->"
+        "\n\t\t\t\tdelete(Row),\n\t\t\t\tCount + 1"
+        "\n\t\t\tend, 0, Rows),\n\n\t\t\t{ok, Num}\n\tend;"
+    ),
+    
+    write_db_delete_select_2(L, Fd).
+    
+write_db_delete_select_3 ([], _) ->
+    ok;
+write_db_delete_select_3 ([T | L], Fd) ->
+    ?FWRITE(Fd, "\n\ndelete_select (" ++ T #table.name ++
+        ", ModeOrFragKey, MatchSpec) ->\n\t?ENSURE_TRAN,"
+        "\n\n\tcase select(" ++ T #table.name ++ 
+        ", ModeOrFragKey, MatchSpec) of\n\t\t[] ->\n\t\t\t{ok, 0};"
+        "\n\t\tRows when is_list(Rows) ->"
+        "\n\t\t\tNum = lists:foldl(fun(Row, Count) ->"
+        "\n\t\t\t\tdelete(Row),\n\t\t\t\tCount + 1"
+        "\n\t\t\tend, 0, Rows),\n\n\t\t\t{ok, Num}\n\tend;"
+    ),
+    
+    write_db_delete_select_3(L, Fd).
+    
+write_db_table_1 (L, Fd) ->   
+    write_db_table_1(L, Fd, true).
+    
+write_db_table_1 ([], Fd, _) ->
+    ?FWRITE(Fd, ".", -1);
+write_db_table_1 ([T | L], Fd, Head) ->
+    case Head of
+        true -> ?FWRITE(Fd, "\n");
+        _ -> ok
+    end,
+    
+    ?FWRITE(Fd, "\ntable (" ++ T #table.name ++ 
+        ") -> ets:table(t_" ++ T #table.name ++ ");"
+    ),
+    
+    write_db_table_1(L, Fd, false).
+    
+write_db_table_2 (L, Fd) ->   
+    write_db_table_2(L, Fd, true).
+    
+write_db_table_2 ([], Fd, _) ->
+    ?FWRITE(Fd, ".", -1);
+write_db_table_2 ([T | L], Fd, Head) ->
+    case Head of
+        true -> ?FWRITE(Fd, "\n");
+        _ -> ok
+    end,
+    
+    ?FWRITE(Fd, "\ntable (" ++ T #table.name ++ 
+        ", Options) -> ets:table(" ++ T #table.name ++ ", Options);"
+    ),
+    
+    write_db_table_2(L, Fd, false).
+    
+write_db_ets (L, Fd) ->
+    write_db_ets(L, Fd, [], []).
+    
+write_db_ets ([], Fd, S1L, S2L) ->
+    write_db_ets_1(lists:reverse(S1L), Fd, true),
+    ?FWRITE(Fd, ".", -1),
+    write_db_ets_2(lists:reverse(S2L), Fd, true),
+    ?FWRITE(Fd, ".", -1);
+write_db_ets ([T | L], Fd, S1L, S2L) ->
+    case table_need_split(T) of
+        {true, _} ->
+            write_db_ets(L, Fd, S1L, [T | S2L]);
+        _ ->
+            write_db_ets(L, Fd, [T | S1L], S2L)
+    end.
+    
+write_db_ets_1 ([], _, _) ->
+    ok;
+write_db_ets_1 ([T | L], Fd, Head) ->
+    case Head of
+        true -> ?FWRITE(Fd, "\n");
+        _ -> ok
+    end,
+    
+    ?FWRITE(Fd, "\nets (" ++ T #table.name ++ ") -> t_" ++
+        T #table.name ++ ";"
+    ),
+    
+    write_db_ets_1(L, Fd, false).
+    
+write_db_ets_2 ([], _, _) ->
+    ok;
+write_db_ets_2 ([T | L], Fd, Head) ->
+    case Head of
+        true -> ?FWRITE(Fd, "\n");
+        _ -> ok
+    end,
+    
+    ?FWRITE(Fd, "\nets (" ++ T #table.name ++ 
+        ", FragId) -> list_to_atom(\"t_" ++ T #table.name ++ 
+        "_\" ++ integer_to_list(FragId rem 100));"
+    ),
+    
+    write_db_ets_2(L, Fd, false).
+    
+write_db_v_insert ([], Fd) ->
+    ?FWRITE(Fd, ".", -1);
+write_db_v_insert ([T | L], Fd) ->
+    ?FWRITE(Fd, "\n\nvalidate_for_insert (Record) when is_record(Record, " ++
+        T #table.name ++ ") ->"
+    ),
+    
+    lists:foreach(
+        fun(C) ->
+            ?FWRITE(Fd, "\n\tif Record #" ++ T #table.name ++ "." ++
+                C #column.name ++ " == null -> throw({null_column, insert, " ++
+                T #table.name ++ ", " ++ C #column.name ++ "}); true -> ok end,"
+            )
+        end,
+        T #table.column
+    ),
+    
+    ?FWRITE(Fd, "\n\tok;"),
+    write_db_v_insert(L, Fd).
+    
+write_db_v_update ([], Fd) ->
+    ?FWRITE(Fd, ".", -1);
+write_db_v_update ([T | L], Fd) ->
+    ?FWRITE(Fd, "\n\nvalidate_for_update (Record) when is_record(Record, " ++
+        T #table.name ++ ") ->"
+    ),
+    
+    lists:foreach(
+        fun(C) ->
+            ?FWRITE(Fd, "\n\tif Record #" ++ T #table.name ++ "." ++
+                C #column.name ++ " == null -> throw({null_column, update, " ++
+                T #table.name ++ ", " ++ C #column.name ++ "}); true -> ok end,"
+            )
+        end,
+        T #table.column
+    ),
+    
+    ?FWRITE(Fd, "\n\tok;"),
+    write_db_v_update(L, Fd).
+    
+write_db_count (L, Fd) ->
+    write_db_count(L, Fd, true).
+    
+write_db_count ([], Fd, _) ->
+    ?FWRITE(Fd, ".", -1);
+write_db_count ([T | L], Fd, Head) ->
+    case Head of
+        true -> ?FWRITE(Fd, "\n");
+        _ -> ok
+    end,
+    
+    ?FWRITE(Fd, "\ncount (" ++ T #table.name ++ 
+        ") -> {size, Size} = lists:keyfind(size, 1, ets:info(t_" ++ 
+        T #table.name ++ ")), Size;"
+    ),
+    
+    write_db_count(L, Fd, false).
+    
+write_db_memory_0 (L, Fd) ->
+    ?FWRITE(Fd, "\n\nmemory () ->"),
+    
+    lists:foreach(
+        fun(T) ->
+            ?FWRITE(Fd, "\n\tmemory(" ++ T #table.name ++ ") +")
+        end,
+        L
+    ),
+    
+    ?FWRITE(Fd, ".", -2).
+    
+write_db_memory_1 (L, Fd) ->
+    write_db_memory_1(L, Fd, true).
+    
+write_db_memory_1 ([], Fd, _) ->
+    ?FWRITE(Fd, ".", -1);
+write_db_memory_1 ([T | L], Fd, Head) ->
+    case Head of
+        true -> ?FWRITE(Fd, "\n");
+        _ -> ok
+    end,
+    
+    ?FWRITE(Fd, "\nmemory (" ++ T #table.name ++ 
+        ") -> {memory, Memory} =lists:keyfind(memory, 1, ets:info(t_" ++
+        T #table.name ++ ")), Memory;"
+    ),
+    
+    write_db_memory_1(L, Fd, false).
+    
+write_db_fetch (Fd) ->
+    ?FWRITE(Fd, "\n\nfetch (Sql) ->"
+        "\n\t{data, ResultId} = mysql:fetch(gamedb, Sql),"
+        "\n\tlib_mysql:get_rows(ResultId)."
+    ).
+    
+write_db_do (Fd) ->
+    ?FWRITE(Fd, "\n\ndo (Tran) ->"
+        "\n\tcase get(tran_action_list) of"
+        "\n\t\tundefined ->"
+        "\n\t\t\tput(tran_log, []),"
+        "\n\t\t\tput(tran_action_list, []),"
+        "\n\t\t\tput(tran_action_list2, []),"
+        "\n\n\t\t\tcase catch Tran() of"
+        "\n\t\t\t\t{'EXIT', {aborted, Reason}} ->"
+        "\n\t\t\t\t\trollback(get(tran_log)),"
+        "\n\t\t\t\t\terase(tran_log),"
+        "\n\t\t\t\t\terase(tran_action_list),"
+        "\n\t\t\t\t\terase(tran_action_list2),"
+        "\n\t\t\t\t\texit(Reason);"
+        "\n\t\t\t\t{'EXIT', Reason} ->"
+        "\n\t\t\t\t\trollback(get(tran_log)),"
+        "\n\t\t\t\t\terase(tran_log),"
+        "\n\t\t\t\t\terase(tran_action_list),"
+        "\n\t\t\t\t\terase(tran_action_list2),"
+        "\n\t\t\t\t\texit(Reason);"
+        "\n\t\t\t\tResult ->"
+        "\n\t\t\t\t\terase(tran_log),"
+        "\n\t\t\t\t\tTranActionList = erase(tran_action_list),"
+        "\n\n\t\t\t\t\tcase TranActionList of"
+        "\n\t\t\t\t\t\t[] -> ok;"
+        "\n\t\t\t\t\t\t_ -> game_db_sync_proc ! {sync, TranActionList}"
+        "\n\t\t\t\t\tend,"
+        "\n\n\t\t\t\t\t{atomic, Result}"
+        "\n\t\t\tend;\n\t\t_ ->\n\t\t\t{atomic, Tran()}\n\tend."
+    ).
+    
+write_db_other (Fd) ->
+    ?FWRITE(Fd, "\n\nadd_tran_log (Data) ->"
+        "\n\tTranLogList = get(tran_log),"
+        "\n\tput(tran_log, [Data | TranLogList])."
+        "\n\nadd_tran_action (TranAction) ->"
+        "\n\tTranActionList = get(tran_action_list),"
+        "\n\tput(tran_action_list, [TranAction | TranActionList])."
+        "\n\nrollback ([]) ->\n\tok;"
+        "\nrollback ([Data | Term]) ->"
+        "\n\tcase Data of"
+        "\n\t\t{insert, Table, RowKey} ->"
+        "\n\t\t\tets:delete(Table, RowKey);"
+        "\n\t\t{update, Table, Row} ->"
+        "\n\t\t\tets:insert(Table, Row);"
+        "\n\t\t{delete, Table, Row} ->"
+        "\n\t\t\tets:insert(Table, Row)"
+        "\n\tend,\n\trollback(Term)."
+        "\n\nget_changes(N, NewRecord, OldRecord) ->"
+        "\n\tget_changes(N, NewRecord, OldRecord, [])."
+        "\n\nget_changes(2, _, _, Changes) ->"
+        "\n\tChanges;"
+        "\nget_changes(N, NewRecord, OldRecord, Changes) ->"
+        "\n\tcase element(N, NewRecord) =:= element(N, OldRecord) of"
+        "\n\t\ttrue -> get_changes(N - 1, NewRecord, OldRecord, Changes);"
+        "\n\t\tfalse -> get_changes(N - 1, NewRecord, OldRecord, [N | Changes])"
+        "\n\tend."
+        "\n\nfetch_lookup(TablePrefix, Key) ->"
+        "\n\tfetch_lookup(TablePrefix, Key, 0)."
+        "\n\nfetch_lookup(_, _, 100) ->"
+        "\n\t[];\nfetch_lookup(TablePrefix, Key, N) ->"
+        "\n\tcase ets:lookup(list_to_atom(TablePrefix ++ integer_to_list(N)), Key) of"
+        "\n\t\t[] -> fetch_lookup(TablePrefix, Key, N + 1);"
+        "\n\t\tR -> R\n\tend."
+        "\n\nfetch_select(TablePrefix, MatchSpec) ->"
+        "\n\tfetch_select(TablePrefix, MatchSpec, 0, [])."
+        "\n\nfetch_select(_, _, 100, Result) ->"
+        "\n\tlists:concat(Result);"
+        "\nfetch_select(TablePrefix, MatchSpec, N, Result) ->"
+        "\n\tfetch_select(TablePrefix, MatchSpec, N + 1, ["
+        "\n\t\tets:select(list_to_atom(TablePrefix ++ integer_to_list(N)), MatchSpec)"
+        " | Result\n\t])."
+    ).
     
 get_trans_by_column (C) ->
     case C #column.type of
@@ -1888,12 +2309,12 @@ table_need_split (T) ->
             false
     end.
     
-table_need_load (T) ->
+table_write_only (T) ->
     case re:run(T #table.name, "_log$") of
         {match, _} ->
-            false;
+            true;
         _ ->
-            true
+            false
     end.
     
 table_primary_key (T) ->
