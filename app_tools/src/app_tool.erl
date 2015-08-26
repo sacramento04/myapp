@@ -1927,7 +1927,7 @@ write_db_write ([T | L], Fd) ->
         ".row_key),\n\t\t\tif OldRecord #" ++ T #table.name ++ 
         ".row_ver =:= Record #" ++ T #table.name ++ ".row_ver -> ok end,"
         "\n\t\t\tChanges = get_changes(" ++ 
-        integer_to_list(length(T #table.column) + 2) ++ ", Record, OldRecord),"
+        ?I2L(length(T #table.column) + 2) ++ ", Record, OldRecord),"
         "\n\t\t\tRealNewRecord = Record #" ++ T #table.name ++ 
         "{row_ver = Record #" ++ T #table.name ++ ".row_ver + 1},"
         "\n\t\t\tets:insert(EtsTable, RealNewRecord),"
@@ -2291,14 +2291,15 @@ generate_db_sync (Db) ->
         "\n\n-include(\"gen/game_db.hrl\")."
     ),
     
-    write_action_to_sql(Db #db.table_list, Fd),
-    write_update_sql(Db #db.table_list, Fd),
+    write_sync_action(Db #db.table_list, Fd),
+    write_sync_generate(Db #db.table_list, Fd),
+    write_sync_other(Fd),
     
     ?FCLOSE(Fd).
     
-write_action_to_sql ([], Fd) ->
+write_sync_action ([], Fd) ->
     ?FWRITE(Fd, ".", -1);
-write_action_to_sql ([T | L], Fd) ->
+write_sync_action ([T | L], Fd) ->
     ?FWRITE(Fd, "\n\ntran_action_to_sql ({" ++ T #table.name ++
         ", sql, Sql}) ->\n\tlist_to_binary(Sql);"
         "\n\ntran_action_to_sql ({" ++ T #table.name ++
@@ -2366,11 +2367,11 @@ write_action_to_sql ([T | L], Fd) ->
         "` SET \">>]),\n\tlist_to_binary(lists:reverse(Sql));", -9
     ),
     
-    write_action_to_sql(L, Fd).
+    write_sync_action(L, Fd).
     
-write_update_sql ([], Fd) ->
+write_sync_generate ([], Fd) ->
     ?FWRITE(Fd, ".", -1);
-write_update_sql ([T | L], Fd) ->
+write_sync_generate ([T | L], Fd) ->
     ?FWRITE(Fd, "\n\ngenerate_update_sql (" ++ T #table.name ++
         ", Record, [], Sql) ->"
     ),
@@ -2400,7 +2401,239 @@ write_update_sql ([T | L], Fd) ->
     
     ?FWRITE(Fd, "\";\\n\">> | Sql];", -9),
     
-    write_update_sql(L, Fd).
+    AIC = case table_auto_increment(T) of
+        {true, C} -> C;
+        _ -> nil
+    end,
+    
+    lists:foldl(
+        fun(C, CI) ->
+            case C =:= AIC of
+                true -> 
+                    ok;
+                _ ->
+                    ?FWRITE(Fd, "\n\ngenerate_update_sql (" ++
+                        T #table.name ++ ", Record, [" ++
+                        ?I2L(CI + 1) ++ " | Changes], Sql) ->\n\t" ++
+                        C #column.format_name ++ " = " ++
+                        get_trans_by_column(C) ++ "(Record #" ++
+                        T #table.name ++ "." ++ C #column.name ++ 
+                        "),\n\tSql2 = case length(Sql) of 1 -> [<<\"`" ++
+                        C #column.name ++ "` = \", " ++
+                        C #column.format_name ++ 
+                        "/binary>> | Sql]; _ -> [<<\",`" ++
+                        C #column.name ++ "` = \", " ++
+                        C #column.format_name ++ "/binary>> | Sql] end,"
+                        "\n\tgenerate_update_sql(" ++
+                        T #table.name ++ ", Record, Changes, Sql2);"
+                    )
+            end,
+            
+            CI + 1
+        end,
+        2,
+        T #table.column
+    ),
+    
+    write_sync_generate(L, Fd).
+    
+write_sync_other (Fd) ->
+    ?FWRITE(Fd, "
+count_work0 () ->
+	{message_queue_len, Len} = process_info(whereis(game_db_sync_worker0), message_queue_len),
+    Len.
+
+count_work1 () ->
+	{message_queue_len, Len} = process_info(whereis(game_db_sync_worker1), message_queue_len),
+    Len.
+
+wait_for_all_data_sync0 (TimeOut) ->
+	wait_for_all_data_sync0(TimeOut, 0).
+	
+wait_for_all_data_sync0 (TimeOut, TimeOut) ->
+    case io:get_chars(\"Time out, continue? [Y/n] : \", 1) of
+        \"n\" ->
+	        io:format(\"wait for all player data sync (0) ... time out\"),
+	        time_out;
+        _ ->
+	        wait_for_all_data_sync0(TimeOut, 0)
+    end;
+wait_for_all_data_sync0 (TimeOut, Time) ->
+	io:format(\"wait for all player data sync (0) ... \"),
+	receive
+	after 1000 ->
+        case count_work0() of
+            0 -> io:format(\"done~n\"), ok;
+			N -> io:format(\"~p~n\", [N]), wait_for_all_data_sync0(TimeOut, Time + 1)
+		end
+	end.
+
+wait_for_all_data_sync1 (TimeOut) ->
+	wait_for_all_data_sync1(TimeOut, 0).
+	
+wait_for_all_data_sync1 (TimeOut, TimeOut) ->
+    case io:get_chars(\"Time out, continue? [Y/n] : \", 1) of
+        \"n\" ->
+	        io:format(\"wait for all player data sync (1) ... time out\"),
+	        time_out;
+        _ ->
+	        wait_for_all_data_sync1(TimeOut, 0)
+    end;
+wait_for_all_data_sync1 (TimeOut, Time) ->
+	io:format(\"wait for all player data sync (1) ... \"),
+	receive
+	after 1000 ->
+        case count_work1() of
+            0 -> io:format(\"done~n\"), ok;
+			N -> io:format(\"~p~n\", [N]), wait_for_all_data_sync1(TimeOut, Time + 1)
+		end
+	end.
+
+start_proc () ->
+    proc_lib:start_link(?MODULE, sync_proc_init, []).
+
+sync_proc_init () ->
+    register(game_db_sync_proc, self()),
+    proc_lib:init_ack({ok, self()}),
+    sync_proc_loop().
+
+sync_proc_loop() ->
+    receive
+        {sync, TranActionList} ->
+            case catch tran_action_list_to_sql_list(TranActionList) of
+                [] -> 
+                    sync_proc_loop();
+                SqlList when is_list(SqlList) ->
+                    game_db_sync_worker0 ! {work, SqlList},
+                    game_db_sync_worker1 ! {work, SqlList},
+                    sync_proc_loop();
+                Error -> 
+                    io:format(\"sync_proc_loop:  TranActionList = ~p~n  Error = ~p~n\", [TranActionList, Error]),
+                    sync_proc_loop()
+            end;
+        {apply, From, M, F, A} ->
+            From ! (catch apply(M, F, A)),
+            sync_proc_loop();
+        _ ->
+            sync_proc_loop()
+    end.
+
+start_worker0 () ->
+    proc_lib:start_link(?MODULE, sync_worker0_init, []).
+    
+sync_worker0_init () ->
+    register(game_db_sync_worker0, self()),
+    proc_lib:init_ack({ok, self()}),
+    {{Y, M, D}, {H, MM,SS}} = erlang:localtime(),
+    Time = {Y, M, D, H},
+	{ok, LogFile} = get_log_file(Time),
+	erlang:send_after((3600 - (MM * 60 + SS)) * 1000, self(), change_file),
+    sync_worker0_loop(Time, LogFile).
+
+sync_worker0_loop (Time, LogFile) ->
+    receive
+        {work, SqlList} ->
+            case catch file:write(LogFile, [<<\"\\n\">> | SqlList]) of
+                ok -> ok;
+                Result -> io:format(\"sync_worker0_loop:  Result = ~p~n\", [Result])
+            end,
+            sync_worker0_loop(Time, LogFile);
+		change_file ->
+            ok = file:close(LogFile), 
+			{{Y, M, D}, {H, MM, SS}} = erlang:localtime(),
+			Time2 = {Y, M, D, H},
+			{ok, LogFile2} = get_log_file(Time2),
+			erlang:send_after((3600 - (MM * 60 + SS)) * 1000, self(), change_file),
+			sync_worker0_loop(Time2, LogFile2);
+        {apply, From, M, F, A} ->
+            From ! (catch apply(M, F, A)),
+            sync_worker0_loop(Time, LogFile);
+        _ ->
+            sync_worker0_loop(Time, LogFile)
+    end.
+
+start_worker1() ->
+    proc_lib:start_link(?MODULE, sync_worker1_init, []).
+
+sync_worker1_init () ->
+    register(game_db_sync_worker1, self()),
+    proc_lib:init_ack({ok, self()}),
+    sync_worker1_loop().
+
+sync_worker1_loop () ->
+    receive
+        {work, SqlList} ->
+            case catch sync_sql_list1(SqlList) of
+                {ok, _} -> ok;
+                Result -> io:format(\"sync_worker1_loop:  SqlList = ~p~n  Result = ~p~n\", [SqlList, Result])
+            end,
+            sync_worker1_loop();
+        {apply, From, M, F, A} ->
+            From ! (catch apply(M, F, A)),
+            sync_worker1_loop();
+        _ ->
+            sync_worker1_loop()
+    end.
+
+sync_sql_list1 (SqlList) ->
+    {ok, mysql:fetch(gamedb, [SqlList], infinity)}.
+
+tran_action_list_to_sql_list (TranActions) ->
+    tran_action_list_to_sql_list(TranActions, []).
+    
+tran_action_list_to_sql_list ([], SqlList) ->
+    SqlList;
+tran_action_list_to_sql_list ([TranAction | Tail], SqlList) ->
+    case tran_action_to_sql(TranAction) of
+        none -> tran_action_list_to_sql_list(Tail, SqlList);
+        Sql  -> tran_action_list_to_sql_list(Tail, [Sql | SqlList])
+    end.
+    
+lst_to_bin (null) ->
+	<<\"NULL\">>;
+lst_to_bin (List) ->
+	List2 = escape_str(List, []),
+	Bin = list_to_binary(List2),
+	<<\"'\", Bin/binary, \"'\">>.
+	
+int_to_bin (null) ->
+    <<\"NULL\">>;
+int_to_bin (Value) ->
+    list_to_binary(integer_to_list(Value)).
+
+rel_to_bin (null) ->
+    <<\"NULL\">>;
+rel_to_bin (Value) when is_integer(Value) ->
+    list_to_binary(integer_to_list(Value));
+rel_to_bin (Value) ->
+    list_to_binary(float_to_list(Value)).
+
+escape_str ([], Result) ->
+	lists:reverse(Result);
+escape_str ([$' | String], Result) ->
+	escape_str(String, [$' | [$\\\\ | Result]]);
+escape_str ([$\" | String], Result) ->
+	escape_str(String, [$\" | [$\\\\ | Result]]);
+escape_str ([$\\\\ | String], Result) ->
+	escape_str(String, [$\\\\ | [$\\\\ | Result]]);
+escape_str ([Char | String], Result) ->
+	escape_str(String, [Char | Result]).
+
+get_log_file({Y, M, D, H}) ->
+    FileName = \"data/\" ++ integer_to_list(Y) ++ \"_\" ++ integer_to_list(M) ++ \"_\" ++ integer_to_list(D) ++ \"/\" ++ integer_to_list(H) ++ \".sql\",
+    case filelib:is_file(FileName) of
+        true -> ok;
+        false -> ok = filelib:ensure_dir(FileName)
+    end,
+	{ok, File} = file:open(FileName, [append, raw, {delayed_write, 1024, 1000}]),
+    ok = file:write(File, <<\"/*!40101 SET NAMES utf8 */;\\n\">>),
+    ok = file:write(File, <<\"/*!40101 SET SQL_MODE=''*/;\\n\">>),
+    ok = file:write(File, <<\"/*!40014 SET @OLD_UNIQUE_CHECKS=@@UNIQUE_CHECKS, UNIQUE_CHECKS=0 */;\\n\">>),
+    ok = file:write(File, <<\"/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;\\n\">>),
+    ok = file:write(File, <<\"/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;\\n\">>),
+    ok = file:write(File, <<\"/*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;\\n\\n\">>),
+    {ok, File}."
+    ).
     
 get_trans_by_column (C) ->
     case C #column.type of
