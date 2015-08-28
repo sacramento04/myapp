@@ -117,12 +117,28 @@ parse_action ([Data | Rest], Pro) ->
 parse_class ([], Pro) ->
     Pro;
 parse_class ([Data | Rest], Pro) ->
-    #{name := Name, field := Field} = Data,
+    #{name := Name, base := Base, field := Field} = Data,
     
-    Class = #class{
-        name = ?A2L(Name),
-        field = parse_field_list(Field)
-    },
+    Class = case Base of
+        nil ->
+            #class{
+                name = ?A2L(Name),
+                base = "",
+                field = parse_field_list(Field)
+            };
+        _ ->
+            BaseField = #field{
+                name = ?A2L(Name) ++ "_parent",
+                type = class,
+                class = ?A2L(Base)
+            },
+            
+            #class{
+                name = ?A2L(Name),
+                base = ?A2L(Base),
+                field = [BaseField | parse_field_list(Field)]
+            }
+    end,
     
     parse_class(
         Rest,
@@ -198,10 +214,10 @@ insert_enum ([Enum | Rest]) ->
     
 get_list_name (Name) when is_atom(Name) ->
     Id = ?SDF(list_counter, ?GDF(list_counter) + 1),
-    ?A2L(Name) ++ "_" ++ ?I2L(Id);
+    ?A2L(Name) ++ "_list_" ++ ?I2L(Id);
 get_list_name (Name) when is_list(Name) ->
     Id = ?SDF(list_counter, ?GDF(list_counter) + 1),
-    Name ++ "_" ++ ?I2L(Id).
+    Name ++ "_list_" ++ ?I2L(Id).
     
 insert_list (Name, Data) when is_atom(Data) ->
     List = #list{name = Name, class = ?A2L(Data),
@@ -314,7 +330,7 @@ write_out_file (Fd, Pro) ->
                     case F #field.type of
                         list ->
                             ?FWRITE(Fd, "\tBinList_" ++ FN
-                                ++ " = [\n\t\tapi_base_list_out:item_to_bin_" 
+                                ++ " = [\n\t\tapi_base_list_out:list_to_bin_" 
                                 ++ Pro #protocol.name ++ "_"
                                 ++ F #field.name ++ "(" ++ FN ++ "_Item) || "
                                 ++ FN ++ "_Item <- " ++ FN ++ "\n\t],\n\n\t"
@@ -330,7 +346,7 @@ write_out_file (Fd, Pro) ->
                             );
                         class ->
                             ?FWRITE(Fd, "\t" ++ FN 
-                                ++ "_Bin = api_base_class_out:type_to_bin_" 
+                                ++ "_Bin = api_base_class_out:class_to_bin_" 
                                 ++ class_name(F #field.class, Pro #protocol.name) 
                                 ++ "(" ++ FN ++ "),\n\n"
                             );
@@ -393,7 +409,7 @@ write_class_in ([Pro | Left], Fd) ->
         begin
             PN = Pro #protocol.name,
             
-            ?FWRITE(Fd, "\n\ntype_parse_" 
+            ?FWRITE(Fd, "\n\nclass_parse_" 
                 ++ class_name(C #class.name, PN) ++ " (_Args0) ->"
             ),
             
@@ -435,7 +451,7 @@ write_class_field ([F | LF], PF, AC, Fd, PN) ->
             ),
             
             ?FWRITE(Fd, "\n\t{" ++ FN ++ ", _Args" 
-                ++ ?I2L(AC+1) ++ "} = type_parse_" 
+                ++ ?I2L(AC+1) ++ "} = class_parse_" 
                 ++ class_name(F #field.class, PN) ++ "("
                 ++ FN ++ "Bin),"
             ),
@@ -500,7 +516,7 @@ write_class_out ([Pro | Left], Fd, Doc) ->
     [
         begin
             CN = class_name(C #class.name, Pro #protocol.name),
-            ?FWRITE(Fd, "\n\ntype_to_bin_" ++ CN ++ " ({ "),
+            ?FWRITE(Fd, "\n\nclass_to_bin_" ++ CN ++ " ({ "),
             
             [
                 ?FWRITE(Fd, "\n\t" ++ format_name(F #field.name) ++ ",")
@@ -516,7 +532,7 @@ write_class_out ([Pro | Left], Fd, Doc) ->
                     case F #field.type of
                         list ->
                             ?FWRITE(Fd, "\tBinList_" ++ FN
-                                ++ " = [\n\t\tapi_base_list_out:item_to_bin_" 
+                                ++ " = [\n\t\tapi_base_list_out:list_to_bin_" 
                                 ++ Pro #protocol.name ++ "_"
                                 ++ F #field.name ++ "(" ++ FN ++ "_Item) || "
                                 ++ FN ++ "_Item <- " ++ FN ++ "\n\t],\n\n\t"
@@ -533,7 +549,7 @@ write_class_out ([Pro | Left], Fd, Doc) ->
                         class ->
                             check_class(F #field.class, Pro #protocol.name, Doc),
                             
-                            ?FWRITE(Fd, "\t" ++ FN ++ "_Bin = type_to_bin_"
+                            ?FWRITE(Fd, "\t" ++ FN ++ "_Bin = class_to_bin_"
                                 ++ class_name(F #field.class, Pro #protocol.name) 
                                 ++ "(" ++ FN ++ "),\n\n"
                             );
@@ -663,7 +679,7 @@ write_list_field ([F | LF], PF, AC, Fd, PN) ->
             ),
             
             ?FWRITE(Fd, "\n\t{" ++ FN ++ ", _Args" 
-                ++ ?I2L(AC+1) ++ "} = api_base_class_in:type_parse_" 
+                ++ ?I2L(AC+1) ++ "} = api_base_class_in:class_parse_" 
                 ++ class_name(F #field.class, PN) ++ "("
                 ++ FN ++ "Bin),"
             ),
@@ -728,11 +744,11 @@ write_list_out ([Pro | Left], Fd) ->
         begin
             case L #list.class of
                 [] ->
-                    ?FWRITE(Fd, "\n\nitem_to_bin_" 
+                    ?FWRITE(Fd, "\n\nlist_to_bin_" 
                         ++ Pro #protocol.name ++ "_" ++ L #list.name ++ " ({ "
                     );
                 _ ->
-                    ?FWRITE(Fd, "\n\nitem_to_bin_" 
+                    ?FWRITE(Fd, "\n\nlist_to_bin_" 
                         ++ Pro #protocol.name ++ "_" ++ L #list.name ++ " ( "
                     )
             end,
@@ -756,7 +772,7 @@ write_list_out ([Pro | Left], Fd) ->
                     case F #field.type of
                         list ->
                             ?FWRITE(Fd, "\tBinList_" ++ FN
-                                ++ " = [\n\t\titem_to_bin_" 
+                                ++ " = [\n\t\tlist_to_bin_" 
                                 ++ Pro #protocol.name ++ "_"
                                 ++ F #field.name ++ "(" ++ FN ++ "_Item) || "
                                 ++ FN ++ "_Item <- " ++ FN ++ "\n\t],\n\n\t"
@@ -772,7 +788,7 @@ write_list_out ([Pro | Left], Fd) ->
                             );
                         class ->
                             ?FWRITE(Fd, "\t" ++ FN 
-                                ++ "_Bin = api_base_class_out:type_to_bin_"
+                                ++ "_Bin = api_base_class_out:class_to_bin_"
                                 ++ class_name(F #field.class, Pro #protocol.name) 
                                 ++ "(" ++ FN ++ "),\n\n"
                             );
@@ -884,7 +900,7 @@ write_action_field ([F | LF], PF, AC, Fd, PN) ->
             ?FWRITE(Fd, FN ++ "Bin/binary>> = _Args" ++ ?I2L(AC) ++ ","),
             
             ?FWRITE(Fd, "\n\t\t\t{" ++ FN ++ ", _Args" 
-                ++ ?I2L(AC+1) ++ "} = api_base_class_in:type_parse_" 
+                ++ ?I2L(AC+1) ++ "} = api_base_class_in:class_parse_" 
                 ++ class_name(F #field.class, PN) ++ "("
                 ++ FN ++ "Bin),"
             ),
@@ -958,8 +974,6 @@ format_name (FN) ->
         
 format_name ([], FN, _) ->
     lists:reverse(FN);
-format_name ([$_ | L], FN, _) ->
-    format_name(L, FN, $_);
 format_name ([C | L], FN, $_) ->
     case (C >= $a andalso C =< $z) of
         true -> 

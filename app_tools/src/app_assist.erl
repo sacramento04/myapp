@@ -149,20 +149,26 @@ parse_body (Bin, Depth) ->
                 {lbrace, V2, B2} ->
                     write(class, "%% class => " ++ ?TLW(?B2L(V2)) ++ "\n", Depth),
                     write(class, "#{\n", Depth),
-                    write(class, "name => " ++ ?TLW(?B2L(V2)) ++ ",\n", Depth),
-                    write(class, "base => nil,\n\n", Depth),
-                    write(class, "field => [  \n", Depth),
-                    NBin = parse_class(B2, class, Depth + 1),
+                    write(class, "name => " ++ ?TLW(?B2L(V2)) ++ ",\n", Depth + 1),
+                    write(class, "base => nil,\n\n", Depth + 1),
+                    write(class, "field => [  \n", Depth + 1),
+                    NBin = parse_class(B2, class, Depth + 2),
+                    write(class, "\n", 0, -3),
+                    write(class, "]\n", Depth + 1),
+                    write(class, "},\n\n", Depth),
                     parse_body(NBin, Depth);
                 {colon, V2, B2} ->
                     case next_token(B2) of
                         {lbrace, V3, B3} ->
                             write(class, "%% class => " ++ ?TLW(?B2L(V2)) ++ "\n", Depth),
                             write(class, "#{\n", Depth),
-                            write(class, "name => " ++ ?TLW(?B2L(V2)) ++ ",\n", Depth),
-                            write(class, "base => '" ++ ?TLW(?B2L(V3)) ++ "',\n\n", Depth),
-                            write(class, "field => [  \n", Depth),
-                            NBin = parse_class(B3, class, Depth + 1),
+                            write(class, "name => " ++ ?TLW(?B2L(V2)) ++ ",\n", Depth + 1),
+                            write(class, "base => '" ++ ?TLW(?B2L(V3)) ++ "',\n\n", Depth + 1),
+                            write(class, "field => [  \n", Depth + 1),
+                            NBin = parse_class(B3, class, Depth + 2),
+                            write(class, "\n", 0, -3),
+                            write(class, "]\n", Depth + 1),
+                            write(class, "},\n\n", Depth),
                             parse_body(NBin, Depth);
                         _ ->
                             ?EXITP("Class define error")
@@ -175,9 +181,9 @@ parse_body (Bin, Depth) ->
                 {lbrace, V2, B2} ->
                     write(action, "%% " ++ ?TLW(?B2L(V2)) ++ " => " ++ ?TLW(?B2L(V1)) ++ "\n", Depth),
                     write(action, "#{\n", Depth),
-                    write(action, "name => " ++ ?TLW(?B2L(V1)) ++ ",\n", Depth),
-                    write(action, "id => " ++ ?TLW(?B2L(V2)) ++ ",\n\n", Depth),
-                    NBin = parse_action(B2, action, Depth + 1),
+                    write(action, "name => " ++ ?TLW(?B2L(V1)) ++ ",\n", Depth + 1),
+                    write(action, "id => " ++ ?TLW(?B2L(V2)) ++ ",\n\n", Depth + 1),
+                    NBin = parse_action(B2, action, Depth + 2),
                     write(action, "},\n\n", Depth),
                     parse_body(NBin, Depth);
                 _ ->
@@ -318,7 +324,6 @@ parse_class (Bin, Field, Depth) ->
                     ?EXITP("Class field define error")
             end;
         {rbrace, _V1, B1} ->
-            write(Field, "]},\n\n", Depth - 1, -3),
             B1;
         _ ->
             ?EXITP("Class define error")
