@@ -19,14 +19,14 @@ main (_) ->
     usage().
 
 usage () ->
-    ?MSG("usage: ...\n"),
+    ?MSG("usage: ...~n"),
     halt(1).
     
 run (1) ->
     ?MSG("Generate Protocol Files...~n"),
     init(),
-    check_dir(get_default_dir(protocol)),
-    Doc = parse_doc(file_find(get_default_dir(protocol), ".erl")),
+    check_dir(get_default_dir(protocol_erl)),
+    Doc = parse_doc(file_find(get_default_dir(protocol_erl), ".erl")),
     save_to_file(Doc, "Protocol.txt", false),
     generate_doc_file(parse_doc_complete(Doc)),
     clean(),
@@ -69,6 +69,8 @@ parse_doc_complete (Doc) when is_record(Doc, doc) ->
 parse_file ([], Doc) ->
     Doc;
 parse_file ([File | Rest], Doc) ->
+    ?MSG("==> ~p~n", [File]),
+    
     parse_file(Rest, 
         Doc #doc{pro_list = [parse_file(File) | Doc #doc.pro_list]}
     ).
