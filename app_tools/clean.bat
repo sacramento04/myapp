@@ -1,2 +1,2 @@
 escript.exe rebar clean
-pause
+exit
