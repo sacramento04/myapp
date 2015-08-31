@@ -77,7 +77,7 @@ get_depth_prefix (Depth) ->
 get_depth_prefix (0, Prefix) ->
     Prefix;
 get_depth_prefix (Depth, Prefix) ->
-    get_depth_prefix(Depth - 1, "\t" ++ Prefix).
+    get_depth_prefix(Depth - 1, [$\t | Prefix]).
     
 check_dir (Dir) ->
     case filelib:is_dir(Dir) of
@@ -249,7 +249,7 @@ parse_action_body (Bin, Field, Depth) ->
                         {langular, _V2, B3} ->
                             write(Field, "{" ++ ?TLW(?B2L(V1)) ++ ", class, ", Depth),
                             {Typeof, NBin} = parse_typeof(B3),
-                            write(Field, Typeof ++ "}, \n", Depth),
+                            write(Field, Typeof ++ "}, \n", 0),
                             parse_action_body(NBin, Field, Depth);
                         _ ->
                             ?EXITP("Typeof define error")

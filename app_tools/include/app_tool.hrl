@@ -43,13 +43,13 @@
 -define(FWRITE(F, S, O), file:pwrite(F, {cur, O}, ?L2B(S))).
 
 %% db
--define(DB_SRV, "192.168.1.71").
+-define(DB_SRV, "192.168.1.73").
 -define(DB_USR, "root").
 -define(DB_PSW, "ybybyb").
--define(GAMEDB, "gamedb_tengyun").
+-define(GAMEDB, "gamedb").
 
 -define(MACRO_LIST, [
-    #macro{table = "ingot_change_type", id = "id",
+    #macro{table = "ingot_log_type", id = "id",
         sign = "sign", name = "name", prefix = "ILT_"}
 ]).
 

@@ -1170,9 +1170,8 @@ generate_db_init (Db) ->
     {ok, Fd} = ?FOPEN(Dir ++ "game_db_init.erl", [write]),
     
     ?FWRITE(Fd, "-module(game_db_init).\n\n-export([\n\t"
-        "init/0,\n\twait_for_loaded/0\n]).\n\n"
-        "-include(\"gen/game_db.hrl\").\n\n"
-        "init () ->\n\tregister(game_db, self()),\n\t"
+        "init/0\n]).\n\n-include(\"gen/game_db.hrl\").\n\n"
+        "init () ->\n\t"
         "mysql:fetch(gamedb, [<<\"SET FOREIGN_KEY_CHECKS=0;\">>]),\n\t"
         "ets:new(auto_increment, [public, set, named_table]),\n"
     ),
@@ -1185,13 +1184,7 @@ generate_db_init (Db) ->
         T <- Db #db.table_list
     ],
     
-    ?FWRITE(Fd, "\n\n\tproc_lib:init_ack({ok, self()}),\n\tloop()."
-        "\n\nloop () ->\n\treceive\n\t\t{is_loaded, Pid} -> Pid "
-        "! yes, loop();\n\t\t_ -> loop()\n\tend."
-        "\n\nwait_for_loaded () ->\n\tgame_db ! {is_loaded, self()},"
-        "\n\treceive yes -> ok end."
-    ),
-    
+    ?FWRITE(Fd, "\n\n\tok."),
     write_db_init(Db, Fd),
     write_db_load(Db, Fd),
     ?FCLOSE(Fd).
@@ -1229,12 +1222,12 @@ write_table_init ([T | L], Fd) ->
                 {true, _} ->
                     ?FWRITE(Fd, "\n\t[ets:new(list_to_atom(\"t_" 
                         ++ T #table.name ++ "_\" ++ integer_to_list(I)), "
-                        "[public, set, name_table, {keypos, 2}]) || "
+                        "[public, set, named_table, {keypos, 2}]) || "
                         "I <- lists:seq(0, 99)],"
                     );
                 _ ->
                     ?FWRITE(Fd, "\n\tets:new(t_" ++ T #table.name
-                        ++ ", [public, set, name_table, {keypos, 2}]),"
+                        ++ ", [public, set, named_table, {keypos, 2}]),"
                     )
             end,
             
@@ -1256,11 +1249,12 @@ write_table_load ([], Fd) ->
     ?FWRITE(Fd, ".", -1);
 write_table_load ([T | L], Fd) ->
     ?FWRITE(Fd, "\n\nload (" ++ T #table.name ++ ") ->"
-        "\n\t{data, [NumResultId]} = mysql:fetch(game_db, [<<\""
-        "SELECT COUNT(1) AS `num` FROM `" ++ T #table.name
-        ++ "`\">>]),\n\t{<<\"num\">>, RecordNumber} = "
-        "lists:keyfind(<<\"num\">>, 1, lib_mysql:get_rows("
-        "NumResultId)),"
+        "\n\tio:format(\"Loading ==> " ++ T #table.name ++ "~n\"),"
+        "\n\t{data, NumResultId} = mysql:fetch(gamedb, [<<\""
+        "SELECT COUNT(1) AS `num` FROM `" ++ T #table.name ++ 
+        "`\">>]),\n\t[NumberResult] = lib_mysql:get_rows(NumResultId),"
+        "\n\t{<<\"num\">>, RecordNumber} = lists:keyfind(<<\"num\">>,"
+        " 1, NumberResult),"
     ),
     
     ?FWRITE(Fd, "\n\n\tlists:foreach(fun(Page) ->\n\t\t"
@@ -1733,7 +1727,7 @@ generate_db_game (Db) ->
     TableList = [T || T <- Db #db.table_list, table_write_only(T) =:= false],
     
     ?FWRITE(Fd, "-module(game_db)."
-        "\n\n-export([\n\tstart_link/0,\n\tdirty_select/3,\n\tdirty_select/2,"
+        "\n\n-export([\n\tdirty_select/3,\n\tdirty_select/2,"
         "\n\tdirty_read/1,\n\tselect/3,\n\tselect/2,\n\tread/1,\n\twrite/1,"
         "\n\tdelete/1,\n\tdelete_all/1,\n\tdelete_select/3,\n\tdelete_select/2,"
         "\n\ttable/1,\n\ttable/2,\n\tets/1,\n\tets/2,\n\tcount/1,\n\tmemory/0,"
@@ -1744,8 +1738,6 @@ generate_db_game (Db) ->
         "\n\tcase get(tran_action_list) of"
         "\n\t\tundefined -> exit(need_gamedb_tran);"
         "\n\t\t_ -> ok\n\tend."
-        "\n\nstart_link () ->"
-        "\n\tproc_lib:start_link(game_db_init, init, [])."
         "\n\ndirty_select (Table, PlayerId, MatchSpec) ->"
         "\n\tselect(Table, PlayerId, MatchSpec)."
         "\n\ndirty_select (Table, MatchSpec) ->"
