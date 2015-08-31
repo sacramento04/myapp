@@ -14,7 +14,7 @@
     kill_all/0  
 ]).
 
--include("app_client_app.hrl").
+-include("app_client.hrl").
 
 
 start_link () ->

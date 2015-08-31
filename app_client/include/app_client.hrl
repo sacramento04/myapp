@@ -8,9 +8,9 @@
     -define(TRACE(Call), ok).
 -endif.
 
--define(INFO(Msg, Args), client_app_log:write(info, Msg, Args)).
--define(ERROR(Msg, Args), client_app_log:write(error, Msg, Args)).
--define(WARNING(Msg, Args), client_app_log:write(warning, Msg, Args)).
+-define(INFO(Msg, Args), app_client_log:write(info, Msg, Args)).
+-define(ERROR(Msg, Args), app_client_log:write(error, Msg, Args)).
+-define(WARNING(Msg, Args), app_client_log:write(warning, Msg, Args)).
 
 -define(LOG_DIR, "./log/").
 

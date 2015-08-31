@@ -1,4 +1,4 @@
--module(app_client_app).
+-module(app_client).
 
 -behavious(application).
 -behavious(supervisor).
@@ -13,7 +13,7 @@
     init/1
 ]).
 
--include("app_client_app.hrl").
+-include("app_client.hrl").
 
 
 start () ->
@@ -24,7 +24,7 @@ start (_Type, _StartArgs) ->
     inets:start(),
     Result = supervisor:start_link({local, ?MODULE}, ?MODULE, []),
     
-    start_client_app_log(),
+    start_app_client_log(),
     start_client_socket_sup(),
     
     Result.
@@ -35,16 +35,16 @@ stop (_State) ->
 init ([]) ->
     {ok, {{one_for_one, 0, 1}, []}}.
     
-start_client_app_log () ->
+start_app_client_log () ->
     {ok, _} = supervisor:start_child(
         ?MODULE, 
         {
-            client_app_log, 
-            {client_app_log, start_link, []}, 
+            app_client_log, 
+            {app_client_log, start_link, []}, 
             permanent, 
             16#FFFFFFFF, 
             worker, 
-            [client_app_log]
+            [app_client_log]
         }
     ).
     

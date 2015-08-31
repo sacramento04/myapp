@@ -1,4 +1,4 @@
--module(client_app_log).
+-module(app_client_log).
 
 -export([
     start_link/0, 
@@ -9,7 +9,7 @@
     log_proc_init/0
 ]).
 
--include("app_client_app.hrl").
+-include("app_client.hrl").
 
 -define(LOG_PROC, ?MODULE).
 

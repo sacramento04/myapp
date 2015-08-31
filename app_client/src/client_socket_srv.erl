@@ -11,7 +11,7 @@
 
 -define(TIME_OUT, infinity).
 
--include("app_client_app.hrl").
+-include("app_client.hrl").
 
 
 start_link (Id) ->
