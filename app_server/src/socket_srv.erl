@@ -10,7 +10,7 @@
     kill_for_stop/1
 ]).
 
--include("app_server_app.hrl").
+-include("app_server.hrl").
 
 
 start_link () ->

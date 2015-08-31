@@ -13,7 +13,7 @@
     kill_all/0
 ]).
 
--include("app_server_app.hrl").
+-include("app_server.hrl").
 
 
 start_link () ->

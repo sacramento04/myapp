@@ -9,7 +9,7 @@
     log_proc_init/0
 ]).
 
--include("app_server_app.hrl").
+-include("app_server.hrl").
 
 -define(LOG_PROC, ?MODULE).
 

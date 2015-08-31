@@ -15,7 +15,7 @@
 -define(SOCKET_ACCEPTOR, 2).
 -define(LISTEN_PORT, 8889).
 
--include("app_server_app.hrl").
+-include("app_server.hrl").
 
 
 start_link () ->
