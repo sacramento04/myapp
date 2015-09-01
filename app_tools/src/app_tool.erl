@@ -33,7 +33,10 @@ run (1) ->
     ok;
 run (2) ->
     ?MSG("Generate Database Files...~n"),
-    generate_db_file(init_database());
+    Db = init_database(),
+    generate_db_file(Db),
+    generate_db_test(Db),
+    ok;
 run (_) ->
     run(1),
     run(2).
@@ -1973,7 +1976,9 @@ write_db_delete ([T | L], Fd) ->
 write_db_delete_all ([], Fd) ->
     ?FWRITE(Fd, ".", -1);
 write_db_delete_all ([T | L], Fd) ->
-    ?FWRITE(Fd, "\n\ndelete_all (" ++ T #table.name ++ ") ->"),
+    ?FWRITE(Fd, "\n\ndelete_all (" ++ T #table.name ++ 
+        ") ->\n\t?ENSURE_TRAN,"
+    ),
     
     case table_need_split(T) of
         {true, _} ->
@@ -2124,6 +2129,11 @@ write_db_v_insert ([T | L], Fd) ->
         T #table.name ++ ") ->"
     ),
     
+    ACL = case table_auto_increment(T) of
+        {true, AC} -> [AC];
+        _ -> []
+    end,
+    
     lists:foreach(
         fun(C) ->
             ?FWRITE(Fd, "\n\tif Record #" ++ T #table.name ++ "." ++
@@ -2131,7 +2141,7 @@ write_db_v_insert ([T | L], Fd) ->
                 T #table.name ++ ", " ++ C #column.name ++ "}); true -> ok end,"
             )
         end,
-        T #table.column
+        T #table.column -- ACL
     ),
     
     ?FWRITE(Fd, "\n\tok;"),
@@ -2328,12 +2338,22 @@ write_sync_action ([T | L], Fd) ->
         T #table.name ++ "` SET \""
     ),
     
-    lists:foreach(
-        fun(C) ->
-            ?FWRITE(Fd, "\n\t\"`" ++ C #column.name ++ "` = \", " ++
-                C #column.format_name ++ "/binary,"
-            )
+    lists:foldl(
+        fun(C, First) ->
+            case First of
+                true ->
+                    ?FWRITE(Fd, "\n\t\"`" ++ C #column.name ++ "` = \", " ++
+                        C #column.format_name ++ "/binary,"
+                    );
+                _ ->
+                    ?FWRITE(Fd, "\n\t\", `" ++ C #column.name ++ "` = \", " ++
+                        C #column.format_name ++ "/binary,"
+                    )
+            end,
+            
+            false
         end,
+        true,
         T #table.column
     ),
     
@@ -2641,6 +2661,134 @@ get_log_file({Y, M, D, H}) ->
     ok = file:write(File, <<\"/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;\\n\">>),
     ok = file:write(File, <<\"/*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;\\n\\n\">>),
     {ok, File}."
+    ).
+    
+generate_db_test (Db) ->
+    Dir = get_default_dir(out),
+    {ok, Fd} = ?FOPEN(Dir ++ "game_db_test.erl", [write]),
+    TableList = [T || T <- Db #db.table_list, table_write_only(T) =:= false],
+    
+    ?FWRITE(Fd, "-module(game_db_test)."
+        "\n\n-export([\n\tinsert/2\n])."
+        "\n\n-include(\"gen/game_db.hrl\")."
+    ),
+    
+    write_test_insert(TableList, Fd),
+    write_test_other(Fd),
+    
+    ?FCLOSE(Fd).
+    
+write_test_insert ([], Fd) ->
+    ?FWRITE(Fd, ".", -1);
+write_test_insert ([T | L], Fd) ->
+    ?FWRITE(Fd, "\n\ninsert (" ++ T #table.name ++ ", InsertNum) ->"),
+    
+    case table_auto_increment(T) of
+        {true, AC} ->
+            ?FWRITE(Fd, "\n\tT = fun() ->\n\t\tlists:foreach(\n\t\t\t"
+                "fun(_) ->\n\t\t\t\tgame_db:write(\n\t\t\t\t\t#" ++ 
+                T #table.name ++ "{"
+            ),
+            
+            lists:foreach(
+                fun(C) ->
+                    ?FWRITE(Fd, "\n\t\t\t\t\t\t" ++ C #column.name ++
+                        " = random_column_value(" ++ 
+                        C #column.type ++ "),"
+                    )
+                end,
+                T #table.column -- [AC]
+            ),
+            
+            ?FWRITE(Fd, "\n\t\t\t\t\t}\n\t\t\t\t)\n\t\t\tend,"
+                "\n\t\t\tlists:seq(1, InsertNum)\n\t\t)\n\tend,"
+                "\n\tgame_db:do(T);", -1
+            );
+        _ ->
+            PK = table_primary_key(T),
+            
+            ?FWRITE(Fd, "\n\tT = fun() ->\n\t\t"
+                "lists:foreach(\n\t\t\tfun(_) ->"
+            ),
+            
+            lists:foreach(
+                fun(K) ->
+                    ?FWRITE(Fd, "\n\t\t\t\t" ++ K #column.format_name ++
+                        " = random_column_value(" ++ 
+                        K #column.type ++ "),"
+                    )
+                end,
+                PK
+            ),
+            
+            ?FWRITE(Fd, "\n\n\t\t\t\tcase game_db:read(#pk_" ++
+                T #table.name ++ "{"
+            ),
+            
+            lists:foreach(
+                fun(K) ->
+                    ?FWRITE(Fd, K #column.name ++ " = " ++
+                        K #column.format_name ++ ", "
+                    )
+                end,
+                PK
+            ),
+            
+            ?FWRITE(Fd, "}) of\n\t\t\t\t\t[_] ->\n\t\t\t\t\t\tok;"
+                "\n\t\t\t\t\t_ ->\n\t\t\t\t\t\tgame_db:write("
+                "\n\t\t\t\t\t\t\t#" ++ T #table.name ++ "{", -2
+            ),
+            
+            lists:foreach(
+                fun(K) ->
+                    ?FWRITE(Fd, "\n\t\t\t\t\t\t\t\t" ++ K #column.name ++
+                        " = " ++ K #column.format_name ++ ","
+                    )
+                end,
+                PK
+            ),
+            
+            lists:foreach(
+                fun(C) ->
+                    ?FWRITE(Fd, "\n\t\t\t\t\t\t\t\t" ++ C #column.name ++
+                        " = random_column_value(" ++ 
+                        C #column.type ++ "),"
+                    )
+                end,
+                T #table.column -- PK
+            ),
+            
+            ?FWRITE(Fd, "\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t)"
+                "\n\t\t\t\tend\n\t\t\tend,\n\t\t\tlists:seq(1, InsertNum)"
+                "\n\t\t)\n\tend,\n\tgame_db:do(T);", -1
+            )
+    end,
+    
+    write_test_insert(L, Fd).
+            
+write_test_other (Fd) ->
+    ?FWRITE(Fd, "\n\n
+random_column_value (int) ->
+    lib_misc:random_number(99999);
+random_column_value (bigint) ->
+    lib_misc:random_number(99999);
+random_column_value (tinyint) ->
+    lib_misc:random_number(99999);
+random_column_value (mediumint) ->
+    lib_misc:random_number(99999);
+random_column_value (float) ->
+    lib_misc:random_number(99999);
+random_column_value (varchar) ->
+    random_string(10, []);
+random_column_value (text) ->
+    random_string(10, []);
+random_column_value (char) ->
+    random_string(10, []).
+    
+random_string (0, Str) ->
+    Str;
+random_string (Len, Str) ->
+    random_string(Len - 1, [lib_misc:random_number_2($a, $z) | Str])."
     ).
     
 get_trans_by_column (C) ->
