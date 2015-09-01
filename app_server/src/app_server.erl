@@ -32,6 +32,7 @@ start (_Type, _StartArgs) ->
     start_gamedb_sync_worker_0(),
     start_gamedb_sync_worker_1(),
     start_gamedb_sync(),
+    start_reloader(),
     
     Result.
     
@@ -129,5 +130,18 @@ start_gamedb_sync () ->
             16#FFFFFFFF, 
             worker, 
             [game_db_sync]
+        }
+    ).
+    
+start_reloader () ->
+    {ok, _} = supervisor:start_child(
+        ?MODULE, 
+        {
+            reloader, 
+            {reloader, start_link, []}, 
+            permanent, 
+            16#FFFFFFFF, 
+            worker, 
+            [reloader]
         }
     ).
