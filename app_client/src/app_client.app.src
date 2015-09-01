@@ -7,6 +7,6 @@
                   kernel,
                   stdlib
                  ]},
-  {mod, { app_client_app, []}},
+  {mod, { app_client, []}},
   {env, []}
  ]}.

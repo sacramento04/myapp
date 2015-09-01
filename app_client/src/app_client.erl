@@ -26,6 +26,7 @@ start (_Type, _StartArgs) ->
     
     start_app_client_log(),
     start_client_socket_sup(),
+    start_reloader(),
     
     Result.
     
@@ -58,5 +59,18 @@ start_client_socket_sup () ->
             16#FFFFFFFF,
             supervisor,
             [client_socket_sup]
+        }
+    ).
+    
+start_reloader () ->
+    {ok, _} = supervisor:start_child(
+        ?MODULE, 
+        {
+            reloader, 
+            {reloader, start_link, []}, 
+            permanent, 
+            16#FFFFFFFF, 
+            worker, 
+            [reloader]
         }
     ).
