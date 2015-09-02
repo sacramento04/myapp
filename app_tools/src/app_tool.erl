@@ -34,6 +34,7 @@ run (1) ->
 run (2) ->
     ?MSG("Generate Database Files...~n"),
     Db = init_database(),
+    save_to_file(Db, "DB.txt", false),
     generate_db_file(Db),
     generate_db_test(Db),
     ok;
@@ -162,24 +163,32 @@ parse_field_list ([Field | Rest], FieldList) ->
     parse_field_list(Rest, [parse_field(Field) | FieldList]).
     
 parse_field ({Name, byte}) ->
-    #field{name = ?A2L(Name), type = byte};
+    FName = ?A2L(Name),
+    #field{name = FName, type = byte, format_name = format_name(FName)};
 parse_field ({Name, short}) ->
-    #field{name = ?A2L(Name), type = short};
+    FName = ?A2L(Name),
+    #field{name = FName, type = short, format_name = format_name(FName)};
 parse_field ({Name, int}) ->
-    #field{name = ?A2L(Name), type = int};
+    FName = ?A2L(Name),
+    #field{name = FName, type = int, format_name = format_name(FName)};
 parse_field ({Name, long}) ->
-    #field{name = ?A2L(Name), type = long};
+    FName = ?A2L(Name),
+    #field{name = FName, type = long, format_name = format_name(FName)};
 parse_field ({Name, string}) ->
-    #field{name = ?A2L(Name), type = string};
+    FName = ?A2L(Name),
+    #field{name = FName, type = string, format_name = format_name(FName)};
 parse_field ({Name, enum, Data}) ->
     ok = insert_enum(Data),
-    #field{name = ?A2L(Name), type = enum};
+    FName = ?A2L(Name),
+    #field{name = FName, type = enum, format_name = format_name(FName)};
 parse_field ({Name, list, Data}) ->
     LName = get_list_name(Name),
+    FName = ?A2L(Name),
     insert_list(LName, Data),
-    #field{name = LName, type = list};
+    #field{name = LName, type = list, format_name = format_name(FName)};
 parse_field ({Name, class, Data}) ->
-    #field{name = ?A2L(Name), type = class, class = ?A2L(Data)};
+    FName = ?A2L(Name),
+    #field{name = FName, type = class, class = ?A2L(Data), format_name = format_name(FName)};
 parse_field (_) ->
     exit(invalid_field).
 
@@ -250,7 +259,9 @@ field_desc (_) ->
 generate_doc_file (Doc) ->
     generate_header(Doc),
     generate_out(Doc),
-    generate_router(Doc).
+    generate_router(Doc),
+    generate_api(Doc),
+    generate_mod(Doc).
     
 generate_header (Doc) ->
     Dir = get_default_dir(header),
@@ -957,6 +968,156 @@ write_action_api (Fd, A, PN) ->
     ],
       
     ?FWRITE(Fd, "_State),").
+    
+generate_api (Doc) ->
+    Dir = get_default_dir(api),
+    ok = filelib:ensure_dir(Dir),
+    delete_dir_file(Dir, ".erl"),
+    generate_api(Doc #doc.pro_list, Dir).
+    
+generate_api ([], _) ->
+    ok;
+generate_api ([Pro | Left], Dir) ->
+    Filename = Dir ++ "api_" ++ Pro #protocol.name ++ ".erl",
+    
+    case filelib:file_size(Filename) of
+        0 ->
+            {ok, Fd} = ?FOPEN(Filename, [write]),
+            
+            ?FWRITE(Fd, "-module(api_" ++ Pro #protocol.name ++
+                ").\n\n-export(["
+            ),
+            
+            lists:foreach(
+                fun(A) ->
+                    ?FWRITE(Fd, "\n\t" ++ A #action.name ++ "/" ++ 
+                        integer_to_list(length(A #action.field_in) + 1) ++
+                        ","
+                    )
+                end,
+                Pro #protocol.action_list
+            ),
+            
+            ?FWRITE(Fd, "\n]).\n\n-include(\"app_server.hrl\").\n", -1),
+            
+            case length(Pro #protocol.enum_list) of
+                0 ->
+                    ok;
+                _ ->
+                    ?FWRITE(Fd, "-include(\"gen/api_" ++ 
+                        Pro #protocol.name ++ ".hrl\").\n"
+                    )
+            end,
+            
+            lists:foreach(
+                fun(A) ->
+                    ?FWRITE(Fd, "\n\n" ++ A #action.name ++ " ("),
+                    
+                    lists:foreach(
+                        fun(F) ->
+                            ?FWRITE(Fd, "\n\t" ++ F #field.format_name ++
+                                ","
+                            )
+                        end,
+                        A #action.field_in
+                    ),
+                    
+                    ?FWRITE(Fd, "\n\tState = #client_state{\n\t\t"
+                        "player_id = _PlayerId, socket = Socket\n\t}\n) ->"
+                        "\n\tResult = mod_" ++ Pro #protocol.name ++ ":" ++
+                        A #action.name ++ "(_PlayerId, "
+                    ),
+                    
+                    lists:foreach(
+                        fun(F) ->
+                            ?FWRITE(Fd, F #field.format_name ++ ", ")
+                        end,
+                        A #action.field_in
+                    ),
+                    
+                    ?FWRITE(Fd, "),\n\tOutBin = api_" ++ Pro #protocol.name ++
+                        ":" ++ A #action.name ++ "(Result),\n\t"
+                        "lib_misc:tcp_send(Socket, OutBin),\n\tState.", -2
+                    )
+                end,
+                Pro #protocol.action_list
+            ),
+            
+            ?FCLOSE(Fd);
+        _ ->
+            ok
+    end,
+
+    generate_api(Left, Dir).
+    
+generate_mod (Doc) ->
+    Dir = get_default_dir(mod),
+    ok = filelib:ensure_dir(Dir),
+    delete_dir_file(Dir, ".erl"),
+    generate_mod(Doc #doc.pro_list, Dir).
+    
+generate_mod ([], _) ->
+    ok;
+generate_mod ([Pro | Left], Dir) ->
+    Filename = Dir ++ "mod_" ++ Pro #protocol.name ++ ".erl",
+    
+    case filelib:file_size(Filename) of
+        0 ->
+            {ok, Fd} = ?FOPEN(Filename, [write]),
+            
+            ?FWRITE(Fd, "-module(mod_" ++ Pro #protocol.name ++
+                ").\n\n-export(["
+            ),
+            
+            lists:foreach(
+                fun(A) ->
+                    ?FWRITE(Fd, "\n\t" ++ A #action.name ++ "/" ++ 
+                        integer_to_list(length(A #action.field_in) + 1) ++
+                        ","
+                    )
+                end,
+                Pro #protocol.action_list
+            ),
+            
+            ?FWRITE(Fd, "\n]).\n\n-include(\"app_server.hrl\").\n"
+                "-include(\"gen/game_db.hrl\").\n", -1
+            ),
+            
+            case length(Pro #protocol.enum_list) of
+                0 ->
+                    ok;
+                _ ->
+                    ?FWRITE(Fd, "-include(\"gen/api_" ++ 
+                        Pro #protocol.name ++ ".hrl\").\n"
+                    )
+            end,
+            
+            lists:foreach(
+                fun(A) ->
+                    ?FWRITE(Fd, "\n\n" ++ A #action.name ++ 
+                        " (\n\t_PlayerId,"
+                    ),
+                    
+                    lists:foreach(
+                        fun(F) ->
+                            ?FWRITE(Fd, "\n\t__" ++ F #field.format_name ++
+                                ","
+                            )
+                        end,
+                        A #action.field_in
+                    ),
+                    
+                    ?FWRITE(Fd, "\n) ->\n\tok.", -1)
+                end,
+                Pro #protocol.action_list
+            ),
+            
+            ?FCLOSE(Fd);
+        _ ->
+            ok
+    end,
+    
+    generate_mod(Left, Dir).
         
 format_name ([]) ->
     [];
@@ -1007,9 +1168,7 @@ init_database () ->
     ),
     
     Rows = lib_mysql:get_rows(R),
-    Db = init_table_column(init_table_name(Rows)),
-    save_to_file(Db, "DB.txt", false),
-    Db.
+    init_table_column(init_table_name(Rows)).
     
 init_table_name (Rows) ->
     init_table_name(Rows, #db{}).
@@ -2466,7 +2625,7 @@ write_sync_generate ([T | L], Fd) ->
     write_sync_generate(L, Fd).
     
 write_sync_other (Fd) ->
-    ?FWRITE(Fd, "
+    ?FWRITE(Fd, "\n\n
 count_work0 () ->
 	{message_queue_len, Len} = process_info(whereis(game_db_sync_worker0), message_queue_len),
     Len.

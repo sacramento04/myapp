@@ -54,6 +54,7 @@
 -record(
     client_state, 
     {
+        player_id = undefined,
         socket = undefined
     }
 ).
