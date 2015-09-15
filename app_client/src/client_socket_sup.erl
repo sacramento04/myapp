@@ -48,12 +48,12 @@ count_child () ->
     
 kill_all () ->
     [{links, Pids}] = process_info(whereis(?MODULE), [links]),
-    GameAppPid = whereis(client_app),
+    AppPid = whereis(app_client),
     
     lists:foreach(
         fun(Pid) ->
             if
-                Pid =/= GameAppPid ->
+                Pid =/= AppPid ->
                     client_socket_srv:kill_for_stop(Pid);
                 true ->
                     ok
